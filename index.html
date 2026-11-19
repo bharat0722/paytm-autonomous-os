@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#08254c">
+  <meta name="description" content="Explore a simulated Soundbox incident from detection to verified recovery in Merchant Reliability OS.">
+  <title>Merchant Reliability OS · Mission Control</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #08254c;
+      --muted: #50657d;
+      --cyan: #00baf2;
+      --line: #dbe6f0;
+      --blue: #075d9f;
+      --good: #09684e;
+      --surface: #f4f8fc;
+      font: 16px/1.5 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; color: var(--ink); background: var(--surface); }
+    a { color: inherit; text-decoration: none; }
+    button { font: inherit; }
+    button:focus-visible, a:focus-visible { outline: 3px solid #1555cd; outline-offset: 4px; }
+    button:disabled { opacity: .65; cursor: wait; }
+    [hidden] { display: none !important; }
+    h1, h2, h3, p { margin: 0; }
+    .layout { display: grid; grid-template-columns: 224px minmax(0, 1fr); min-height: 100vh; }
+    .rail {
+      position: sticky; top: 0; height: 100dvh; background: white; border-right: 1px solid var(--line);
+      padding: 28px 16px 22px; display: flex; flex-direction: column;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; margin: 0 3px 45px; }
+    .brand-mark {
+      width: 38px; height: 38px; display: grid; place-items: center; flex: none;
+      background: var(--ink); color: #77dcff; border-radius: 12px;
+    }
+    .waves { display: inline-flex; align-items: center; gap: 3px; }
+    .waves i { width: 3px; height: 10px; border-radius: 3px; background: currentColor; }
+    .waves i:nth-child(2) { height: 17px; }
+    .waves i:nth-child(3) { height: 13px; }
+    .brand-name { font-size: .98rem; font-weight: 820; letter-spacing: -.04em; line-height: 1.12; }
+    .brand-name span { display: block; color: var(--blue); }
+    .rail nav { display: grid; gap: 5px; }
+    .rail nav a {
+      padding: 12px 10px; border-radius: 10px; color: var(--muted); font-size: .875rem;
+      font-weight: 690; display: flex; align-items: center; gap: 9px;
+    }
+    .rail nav a:hover, .rail nav a[aria-current] { background: #e5f6ff; color: #0c4e80; }
+    .rail nav a[aria-current] { box-shadow: inset 3px 0 #04a3df; }
+    .nav-icon { width: 15px; height: 15px; display: inline-grid; place-items: center; flex: none; font-size: 1rem; line-height: 1; }
+    .workspace { border-top: 1px solid var(--line); margin-top: auto; padding: 19px 3px 0; display: flex; align-items: center; gap: 9px; }
+    .avatar { width: 34px; height: 34px; display: grid; place-items: center; background: #e4f6fd; color: #075580; border-radius: 10px; font-weight: 800; }
+    .workspace strong, .workspace small { display: block; font-size: .82rem; line-height: 1.35; }
+    .workspace small { color: var(--muted); }
+    .page { min-width: 0; }
+    .topbar {
+      display: flex; justify-content: space-between; gap: 12px; align-items: center; height: 67px;
+      padding: 0 max(24px, calc((100% - 1152px) / 2)); background: white; border-bottom: 1px solid var(--line);
+    }
+    .breadcrumb { font-weight: 680; font-size: .88rem; white-space: nowrap; }
+    .breadcrumb span { color: var(--muted); font-weight: 550; }
+    .toolbar { display: flex; gap: 12px; align-items: center; }
+    .tag { display: inline-flex; align-items: center; gap: 6px; border-radius: 20px; font-weight: 760; font-size: .78rem; line-height: 1.1; padding: 7px 9px; white-space: nowrap; }
+    .tag.demo, .tag.info { color: #075389; background: #def2ff; }
+    .tag.waiting { color: #78460a; background: #fff1d6; }
+    .tag.good { color: #08684c; background: #def7ec; }
+    .tag.rejected { color: #8d301d; background: #ffebe6; }
+    .dot { display: inline-block; width: 7px; height: 7px; background: currentColor; border-radius: 50%; flex: none; }
+    .text-button {
+      border: 0; background: transparent; font-size: .875rem; font-weight: 710; cursor: pointer;
+      color: var(--blue); border-radius: 6px; padding: 8px 3px;
+    }
+    .text-button:hover { text-decoration: underline; }
+    .content { max-width: 1200px; padding: 25px 24px 0; margin: 0 auto; }
+    .hero {
+      position: relative; isolation: isolate; overflow: hidden; min-height: 302px;
+      display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(260px, 1fr);
+      border-radius: 22px; background: linear-gradient(112deg, #e2f6ff 0%, #cef1ff 47%, #8edfff 100%);
+      border: 1px solid #bbe8fa; align-items: stretch;
+    }
+    .hero-copy { padding: 30px clamp(26px, 4vw, 48px); display: flex; flex-direction: column; justify-content: center; align-items: flex-start; }
+    .eyebrow { color: #075f94; font-size: .78rem; font-weight: 820; letter-spacing: .115em; text-transform: uppercase; margin-bottom: 9px; }
+    h1 { font-size: clamp(2.35rem, 4.3vw, 4.05rem); line-height: 1.01; letter-spacing: -.067em; font-weight: 830; max-width: 13ch; }
+    .hero-copy p:not(.eyebrow) { max-width: 43ch; color: #264c6b; margin-top: 14px; line-height: 1.48; }
+    .button {
+      border: 1px solid transparent; border-radius: 10px; padding: 10px 15px; font-weight: 760; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 43px; line-height: 1.15; font-size: .91rem;
+    }
+    .button.primary { background: var(--ink); color: white; box-shadow: 0 4px 9px #09284a12; }
+    .button.primary:hover:not(:disabled) { background: #123c70; }
+    .button.secondary { border-color: var(--line); background: white; color: var(--ink); }
+    .button.secondary:hover { background: #f0f8ff; }
+    .hero .button { margin-top: 21px; padding-inline: 16px; }
+    .play { width: 0; height: 0; border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 8px solid #83ddff; }
+    .illustration { position: relative; width: 100%; min-height: 275px; display: grid; place-items: center; }
+    .ring { position: absolute; border: 1px solid #fff9; border-radius: 50%; width: 232px; aspect-ratio: 1; right: 22%; top: 50%; transform: translate(12%, -50%); }
+    .ring:nth-child(2) { width: 310px; border-color: #ffffff75; }
+    .ring:nth-child(3) { width: 395px; border-color: #ffffff5e; }
+    .device {
+      position: relative; margin: -20px 12px 0 0; width: 125px; height: 168px; border-radius: 24px;
+      transform: rotate(-13deg); background: linear-gradient(135deg, white, #faffff 56%, #d9edfb); border: 1px solid white;
+      box-shadow: 8px 7px 0 #7ab9d6, 15px 29px 36px #15698c45;
+      display: flex; flex-direction: column; align-items: center;
+    }
+    .device-panel {
+      margin-top: 15px; width: 92px; height: 88px; border-radius: 16px; display: grid; place-items: center; color: #88e2ff;
+      background: radial-gradient(circle at 68% 30%, #174779, #0a294e 68%); border: 1px solid #05365e;
+    }
+    .device-panel .waves { gap: 5px; }
+    .device-panel .waves i { width: 5px; height: 16px; }
+    .device-panel .waves i:nth-child(2) { height: 30px; }
+    .device-panel .waves i:nth-child(3) { height: 22px; }
+    .speaker { margin-top: 11px; width: 58px; height: 18px; background: radial-gradient(circle, #59849c 1px, transparent 1.7px) 0 0 / 6px 6px; opacity: .72; }
+    .device-light { height: 4px; width: 20px; margin-top: 7px; border-radius: 8px; background: #00baf2; }
+    .signal-label {
+      z-index: 1; position: absolute; left: 49%; bottom: 30px; background: white; border: 1px solid #ffffffbf;
+      border-radius: 14px; box-shadow: 0 12px 32px #0e6c9a26; padding: 11px 14px; white-space: nowrap; font-size: .85rem;
+    }
+    .signal-label strong, .signal-label span { display: block; }
+    .signal-label span { color: var(--muted); }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 13px; margin: 17px 0 22px; }
+    .metric { background: white; border: 1px solid var(--line); border-radius: 14px; padding: 13px 14px 11px; min-width: 0; }
+    .metric p { font-size: .86rem; font-weight: 680; color: var(--muted); }
+    .metric strong { display: block; font-size: 1.85rem; line-height: 1.15; letter-spacing: -.05em; margin-top: 3px; font-variant-numeric: tabular-nums; }
+    .metric .accent { color: var(--good); }
+    .board { display: grid; grid-template-columns: minmax(0, 1.48fr) minmax(0, 1fr); gap: 16px; align-items: start; padding-bottom: 19px; }
+    .panel { background: white; border: 1px solid var(--line); border-radius: 16px; min-width: 0; scroll-margin-top: 15px; }
+    .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 16px 17px; border-bottom: 1px solid #e8eff5; }
+    .panel-heading h2 { font-size: 1.13rem; letter-spacing: -.028em; }
+    .minor { font-size: .79rem; color: var(--muted); white-space: nowrap; }
+    .panel-body { padding: 15px 17px 18px; }
+    .incident-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 9px; flex-wrap: wrap; }
+    .incident-title h3, .approval-title { font-size: 1.055rem; font-weight: 800; letter-spacing: -.025em; }
+    .incident-explainer, .approval-copy { color: var(--muted); font-size: .91rem; margin-top: 5px; }
+    .recovery { background: #f5faff; border: 1px solid #dcecf8; border-radius: 11px; padding: 11px 13px; margin: 14px 0; }
+    .recovery-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: .88rem; font-weight: 720; }
+    .recovery-title strong { color: var(--good); font-variant-numeric: tabular-nums; }
+    .segments { display: flex; gap: 3px; margin-top: 8px; }
+    .segments i { flex: 1; height: 7px; border-radius: 3px; background: #c9dce8; }
+    .segments i.pass { background: #168e70; }
+    .segments i.pending { background: #eeaf4c; }
+    .timeline { list-style: none; display: grid; gap: 7px; padding: 0; margin: 0; }
+    .timeline li { display: flex; align-items: flex-start; gap: 9px; font-size: .865rem; color: #3a526c; }
+    .timeline .bullet { width: 8px; height: 8px; background: #12a9df; border-radius: 50%; margin-top: 7px; flex: none; }
+    .timeline strong { color: var(--ink); }
+    .device-list { display: flex; flex-wrap: wrap; list-style: none; padding: 0; gap: 5px; margin: 12px 0 14px; }
+    .device-list li { padding: 4px 7px; background: #eff6fc; border-radius: 5px; color: #315678; font-size: .795rem; font-weight: 720; }
+    .approval-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .footer { border-top: 1px solid var(--line); padding: 12px 0 16px; color: var(--muted); font-size: .82rem; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+    @media (max-width: 1100px) {
+      .layout { grid-template-columns: 190px minmax(0, 1fr); }
+      .rail { padding-inline: 12px; }
+      .signal-label { left: 44%; }
+    }
+    @media (max-width: 905px) {
+      .layout { display: block; }
+      .rail { position: static; height: auto; padding: 12px 20px; border-right: 0; border-bottom: 1px solid var(--line); }
+      .brand { margin: 0; }
+      .rail nav { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+      .rail nav a { padding: 8px 9px; }
+      .workspace, .breadcrumb span { display: none; }
+      .topbar { height: 54px; padding-inline: 20px; }
+      .content { padding: 17px 20px 0; }
+    }
+    @media (max-width: 630px) {
+      .content { padding-inline: 12px; }
+      .topbar, .rail { padding-inline: 12px; }
+      .topbar { gap: 8px; }
+      .toolbar { gap: 7px; }
+      .hero { grid-template-columns: minmax(0, 1fr); }
+      .hero-copy { padding: 22px 20px 0; }
+      h1 { font-size: clamp(2.3rem, 10vw, 3.4rem); }
+      .illustration { min-height: 183px; }
+      .device { transform: scale(.75) rotate(-13deg); margin-top: 0; margin-right: 84px; }
+      .ring { right: 35%; top: 52%; }
+      .ring:nth-child(3) { width: 315px; }
+      .signal-label { left: 49%; bottom: 30px; padding: 8px 10px; }
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .board { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="rail">
+      <a class="brand" href="#mission-control">
+        <span class="brand-mark" aria-hidden="true"><span class="waves"><i></i><i></i><i></i></span></span>
+        <strong class="brand-name">Merchant<span>Reliability OS</span></strong>
+      </a>
+      <nav aria-label="Workspace">
+        <a href="#mission-control" aria-current="location"><span class="nav-icon" aria-hidden="true">▦</span>Mission Control</a>
+        <a href="#incident"><span class="nav-icon" aria-hidden="true">◎</span>Incident War Room</a>
+        <a href="#approval"><span class="nav-icon" aria-hidden="true">◇</span>Approval Center</a>
+      </nav>
+      <div class="workspace"><span class="avatar" aria-hidden="true">B</span><div><strong>Build for Bharat</strong><small>Demo workspace</small></div></div>
+    </aside>
+    <div class="page">
+      <header class="topbar">
+        <div class="breadcrumb"><span>Operations&nbsp; / &nbsp;</span>Mission Control</div>
+        <div class="toolbar">
+          <span class="tag demo"><span class="dot" aria-hidden="true"></span>Synthetic demo</span>
+          <button class="text-button" id="reset" type="button">Reset demo</button>
+        </div>
+      </header>
+      <main class="content" id="mission-control">
+        <section class="hero" aria-labelledby="hero-title">
+          <div class="hero-copy">
+            <p class="eyebrow">Merchant operations</p>
+            <h1 id="hero-title">Soundbox incident response.</h1>
+            <p>Investigate Soundbox incidents, approve simulated fixes, and see which devices recover.</p>
+            <button class="button primary" id="run" type="button"><span class="play" aria-hidden="true"></span>Run Soundbox demo</button>
+          </div>
+          <div class="illustration">
+            <span class="ring" aria-hidden="true"></span><span class="ring" aria-hidden="true"></span><span class="ring" aria-hidden="true"></span>
+            <div class="device" aria-hidden="true">
+              <span class="device-panel"><span class="waves"><i></i><i></i><i></i></span></span>
+              <span class="speaker"></span><span class="device-light"></span>
+            </div>
+            <div class="signal-label"><strong>Soundbox network</strong><span>24 simulated devices</span></div>
+          </div>
+        </section>
+
+        <section class="metrics" aria-label="Network metrics">
+          <article class="metric"><p>Active incidents</p><strong id="active-count">1</strong></article>
+          <article class="metric"><p>Merchants still affected</p><strong id="affected-count">4</strong></article>
+          <article class="metric"><p>Devices recovered</p><strong class="accent" id="recovered-count">20</strong></article>
+          <article class="metric"><p>Pending approvals</p><strong id="approval-count">1</strong></article>
+        </section>
+
+        <div class="board">
+          <section class="panel" id="incident" aria-labelledby="incident-heading">
+            <div class="panel-heading"><h2 id="incident-heading">Incident War Room</h2><span class="minor">INC-001</span></div>
+            <div class="panel-body">
+              <div class="incident-title">
+                <h3>Soundbox notifications delayed</h3>
+                <span class="tag waiting" id="incident-status">Awaiting approval</span>
+              </div>
+              <p class="incident-explainer">24 merchants share a device error. Payment records show successful transactions.</p>
+              <div class="recovery">
+                <div class="recovery-title"><span>Verified device recovery</span><strong id="recovery-count">20 / 24</strong></div>
+                <div class="segments" id="segments" aria-hidden="true"></div>
+              </div>
+              <ol class="timeline" id="timeline" aria-label="Simulated incident activity"></ol>
+            </div>
+          </section>
+
+          <section class="panel" id="approval" aria-labelledby="approval-heading">
+            <div class="panel-heading">
+              <h2 id="approval-heading">Approval Center</h2><span class="tag waiting" id="approval-status">Pending</span>
+            </div>
+            <div class="panel-body">
+              <h3 class="approval-title" id="approval-title">Restart 4 Soundbox devices</h3>
+              <p class="approval-copy" id="approval-copy">These devices still failed the notification check after configuration sync.</p>
+              <ul class="device-list" id="devices" aria-label="Restart targets">
+                <li>SB-021</li><li>SB-022</li><li>SB-023</li><li>SB-024</li>
+              </ul>
+              <div class="approval-actions" id="approval-actions">
+                <button class="button primary" id="approve" type="button">Approve restart</button>
+                <button class="button secondary" id="reject" type="button">Reject</button>
+              </div>
+            </div>
+          </section>
+        </div>
+        <footer class="footer">Browser simulation with synthetic data and simulated device actions.</footer>
+      </main>
+    </div>
+  </div>
+  <p class="sr-only" id="announcement" role="status"></p>
+  <noscript><p>This demo needs JavaScript to run the simulated incident.</p></noscript>
+  <script>
+    const byId = (id) => document.getElementById(id);
+    const cohortSize = 24;
+    const stages = {
+      investigating: {
+        recovered: 0, incident: 'Investigating', approval: 'Not ready', tone: 'info',
+        title: 'Checking device signals', copy: 'The demo is comparing device events and merchant reports.'
+      },
+      awaiting: {
+        recovered: 20, incident: 'Awaiting approval', approval: 'Pending', tone: 'waiting',
+        title: 'Restart 4 Soundbox devices', copy: 'These devices still failed the notification check after configuration sync.'
+      },
+      verifying: {
+        recovered: 20, incident: 'Verifying recovery', approval: 'Approved', tone: 'info',
+        title: 'Checking fresh device signals', copy: 'The simulated restart ran once. Recovery checks are in progress.'
+      },
+      resolved: {
+        recovered: 24, incident: 'Resolved', approval: 'Completed', tone: 'good',
+        title: 'Restart verified', copy: 'All four restarted devices passed a fresh notification check.'
+      },
+      rejected: {
+        recovered: 20, incident: 'Escalated', approval: 'Rejected', tone: 'rejected',
+        title: 'Restart rejected', copy: 'Four devices still need attention. The incident remains open.'
+      }
+    };
+    let state = 'awaiting';
+    let transitionTimer;
+
+    const segmentFragment = document.createDocumentFragment();
+    for (let index = 0; index < cohortSize; index += 1) {
+      segmentFragment.append(document.createElement('i'));
+    }
+    byId('segments').append(segmentFragment);
+    const segments = [...byId('segments').children];
+
+    function writeTimeline(stage) {
+      const entries = [['Detection', 'Grouped 24 device errors into one incident.']];
+      if (stage !== 'investigating') {
+        entries.push(['Config sync', 'Simulated sync restored 20 devices.']);
+        const nextEntry = {
+          awaiting: ['Approval required', 'Four devices need a restart.'],
+          verifying: ['Restart approved', 'Checking the four restarted devices.'],
+          resolved: ['Recovery verified', 'Fresh checks passed for all 24 devices.'],
+          rejected: ['Escalation', 'The restart request was rejected.']
+        };
+        entries.push(nextEntry[stage]);
+      }
+      byId('timeline').replaceChildren(...entries.map(([label, detail]) => {
+        const item = document.createElement('li');
+        const bullet = document.createElement('span');
+        bullet.className = 'bullet';
+        bullet.setAttribute('aria-hidden', 'true');
+        const text = document.createElement('span');
+        const title = document.createElement('strong');
+        title.textContent = label + ' · ';
+        text.append(title, detail);
+        item.append(bullet, text);
+        return item;
+      }));
+    }
+
+    function setStage(stage, announce = true) {
+      state = stage;
+      const view = stages[stage];
+      byId('active-count').textContent = stage === 'resolved' ? 0 : 1;
+      byId('affected-count').textContent = cohortSize - view.recovered;
+      byId('recovered-count').textContent = view.recovered;
+      byId('approval-count').textContent = Number(stage === 'awaiting');
+      byId('recovery-count').textContent = view.recovered + ' / ' + cohortSize;
+      byId('incident-status').textContent = view.incident;
+      byId('incident-status').className = 'tag ' + view.tone;
+      byId('approval-status').textContent = view.approval;
+      byId('approval-status').className = 'tag ' + view.tone;
+      byId('approval-title').textContent = view.title;
+      byId('approval-copy').textContent = view.copy;
+      byId('devices').hidden = stage === 'investigating';
+      byId('approval-actions').hidden = stage !== 'awaiting';
+      byId('run').disabled = stage === 'investigating' || stage === 'verifying';
+      segments.forEach((segment, index) => {
+        segment.className = index < view.recovered ? 'pass' : stage === 'investigating' ? '' : 'pending';
+      });
+      writeTimeline(stage);
+      if (announce) byId('announcement').textContent = view.incident + '. ' + view.recovered + ' of 24 devices recovered.';
+    }
+
+    byId('run').addEventListener('click', () => {
+      clearTimeout(transitionTimer);
+      setStage('investigating');
+      transitionTimer = setTimeout(() => setStage('awaiting'), 900);
+    });
+    byId('approve').addEventListener('click', () => {
+      if (state !== 'awaiting') return;
+      setStage('verifying');
+      transitionTimer = setTimeout(() => setStage('resolved'), 950);
+    });
+    byId('reject').addEventListener('click', () => {
+      if (state === 'awaiting') setStage('rejected');
+    });
+    byId('reset').addEventListener('click', () => {
+      clearTimeout(transitionTimer);
+      setStage('awaiting');
+    });
+    document.querySelector('.rail nav').addEventListener('click', (event) => {
+      const link = event.target.closest('a');
+      if (!link) return;
+      document.querySelector('.rail nav [aria-current]').removeAttribute('aria-current');
+      link.setAttribute('aria-current', 'location');
+    });
+    setStage('awaiting', false);
+  </script>
+</body>
+</html>
