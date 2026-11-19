@@ -107,7 +107,8 @@ async function investigate(core: CoreRuntime, options: WorkflowOptions, job: Job
       const step = parseJson<unknown>(s.step_json, null)
       const result = parseJson<Record<string, unknown> & { __proposal?: Proposal; __tool?: string; __kind?: string }>(s.result_json, {})
       if (result.__tool && result.ok === true) state.used.add(result.__tool)
-      if (result.__tool && result.ok === false && result.__kind === "proposal") state.deniedProposals.add(result.__tool)
+      // Only the scripted path's own denials stop it from re-proposing; a model's denial does not.
+      if (result.__tool && result.ok === false && result.__kind === "proposal" && s.mode === "scripted_fallback") state.deniedProposals.add(result.__tool)
       if (result.__proposal) state.proposal = result.__proposal
       const { __proposal: _p, __tool: _t, __kind: _k, ...modelResult } = result
       history.push({ step, result: modelResult })
@@ -177,7 +178,7 @@ async function investigate(core: CoreRuntime, options: WorkflowOptions, job: Job
       continue
     }
     const kind = TOOLS[step.tool]!.kind
-    applyOutcome(state, step.tool, kind, run.outcome)
+    applyOutcome(state, step.tool, kind, run.outcome, ep.mode)
     ep = recordStep(core, job, scope, ep, history, step, run.outcome, step.tool, kind)
   }
 }
@@ -229,14 +230,14 @@ function validateFinding(state: ToolState, f: Finding): string | null {
   return null
 }
 
-function applyOutcome(state: ToolState, tool: string, kind: "read" | "proposal", o: ToolOutcome): void {
+function applyOutcome(state: ToolState, tool: string, kind: "read" | "proposal", o: ToolOutcome, mode: Mode): void {
   for (const ev of o.newEvidence) {
     state.retrieved.set(ev.id, ev)
     state.citable.add(ev.id)
   }
   for (const c of o.newCitable) state.citable.add(c.id)
   if (o.ok) state.used.add(tool)
-  if (!o.ok && kind === "proposal") state.deniedProposals.add(tool)
+  if (!o.ok && kind === "proposal" && mode === "scripted_fallback") state.deniedProposals.add(tool)
   if (o.proposal) state.proposal = o.proposal
 }
 

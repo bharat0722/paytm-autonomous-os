@@ -78,6 +78,9 @@ function executeTx(core: CoreRuntime, options: WorkflowOptions, tx: Sql, job: Jo
   if (action.status !== "PROPOSED") return
   const incident = core.incidents.get(tx, scope)
   if (!incident) return
+  // Only an approved/authorized run moves the incident to ACTION_RUNNING; any other
+  // delivery is stale or unauthorized and must have no effect on the action either.
+  if (incident.card.status !== "ACTION_RUNNING") return
   const now = core.clock.now()
   const targets = parseJson<string[]>(action.target_ids, [])
   const label = LABEL[action.kind] ?? action.kind
