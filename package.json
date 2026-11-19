@@ -1,0 +1,31 @@
+{
+  "name": "merchant-reliability-os",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Merchant Reliability OS - SYNTHETIC DEMO",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "packageManager": "npm@11.19.0",
+  "scripts": {
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:workflow": "vitest run tests/workflow",
+    "dev:api": "tsx server/workflow/entry.ts",
+    "smoke:live": "tsx tests/workflow/live-smoke.ts"
+  },
+  "dependencies": {
+    "express": "^5.3.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.6",
+    "@types/supertest": "^7.2.1",
+    "supertest": "^7.3.2",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.1"
+  }
+}
