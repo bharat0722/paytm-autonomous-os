@@ -89,6 +89,9 @@ export function isLegalTransition(from: IncidentStatus, to: IncidentStatus): boo
   return INCIDENT_TRANSITIONS[from].includes(to)
 }
 
+/** Alias used by the workflow module (feat/workflow). Same semantics as isLegalTransition. */
+export const canTransition = isLegalTransition
+
 /** Errors thrown by core ports. `code` maps to the HTTP error codes. */
 export class CoreError extends Error {
   constructor(public readonly code: "STALE_GENERATION" | "NOT_FOUND" | "INVALID_INPUT" | "CONFLICT" | "FENCED", message: string) {
