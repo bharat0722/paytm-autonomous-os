@@ -36,8 +36,9 @@ export function applySimulation(tx: Sql, clock: Clock, scope: Scope, input: Simu
   const targets = [...new Set(input.targetIds)]
 
   if (input.kind === "MOCK_SYNC_DEVICE_CONFIG" || input.kind === "MOCK_RESTART_DEVICE") {
+    // One action = one simulated execution instant for every target.
+    const appliedAt = advanceTelemetry(tx, scope.generation, 1_000)
     targets.forEach((targetId, i) => {
-      const appliedAt = advanceTelemetry(tx, scope.generation, 2_000)
       const inRoster = tx.get<{ x: number }>("SELECT 1 AS x FROM incident_devices WHERE incident_id = ? AND device_id = ?", [scope.incidentId, targetId])
       let ok = false
       let reason: string | null = null
@@ -65,8 +66,8 @@ export function applySimulation(tx: Sql, clock: Clock, scope: Scope, input: Simu
 
   if (input.kind === "LINK_SUPPORT_TICKETS") {
     const linked = new Set(tx.all<{ record_id: string }>("SELECT record_id FROM incident_evidence WHERE incident_id = ? AND kind = 'ticket'", [scope.incidentId]).map((r) => r.record_id))
+    const appliedAt = advanceTelemetry(tx, scope.generation, 1_000)
     targets.forEach((targetId, i) => {
-      const appliedAt = advanceTelemetry(tx, scope.generation, 1_000)
       let ok = false
       let reason: string | null = null
       const t = linked.has(targetId)
@@ -108,6 +109,9 @@ export function emitTelemetry(tx: Sql, job: Job): number {
   const targets = tx.all<{ target_id: string; ok: number }>(
     "SELECT target_id, ok FROM sim_applied WHERE action_id = ? AND generation = ? ORDER BY ordinal", [actionId, job.generation])
   let written = 0
+  // Devices report ~3 s after the action, then observations arrive in 250 ms steps,
+  // so a 24-device action completes well inside a 60 s verification window.
+  advanceTelemetry(tx, job.generation, 3_000)
   for (const t of targets) {
     if (t.ok !== 1) continue
     const d = tx.get<{ config_version: string; restarted_at: string | null; needs_restart: number; restart_fails: number }>(
@@ -117,7 +121,7 @@ export function emitTelemetry(tx: Sql, job: Job): number {
     const configOk = d.config_version === FIXED_CONFIG
     const notifyOk = configOk && (d.needs_restart === 0 || (d.restarted_at !== null && d.restart_fails === 0))
     for (const [kind, passed] of [["heartbeat", true], ["config", configOk], ["notification_probe", notifyOk]] as const) {
-      const occurredAt = advanceTelemetry(tx, job.generation, 1_500)
+      const occurredAt = advanceTelemetry(tx, job.generation, 250)
       tx.run(`INSERT INTO observations (id, generation, device_id, action_id, sequence, occurred_at, kind, passed) VALUES (?,?,?,?,?,?,?,?)`,
         [newId("obs"), job.generation, t.target_id, actionId, nextTelemetrySequence(tx, job.generation), occurredAt, kind, passed ? 1 : 0])
       written++

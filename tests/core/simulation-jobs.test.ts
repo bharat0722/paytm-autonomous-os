@@ -82,6 +82,22 @@ describe("simulation + telemetry", () => {
     expect(res[0]).toMatchObject({ ok: false, reason: "not in incident cohort" })
   })
 
+  it("all targets share one execution instant and observations land within 30 s of it", async () => {
+    const { c, scope, roster } = setup()
+    const ids = roster.map((d) => d.id)
+    const applied = c.runtime.db.write((tx) => c.runtime.simulation.apply(tx, scope, { actionId: "w1", kind: "MOCK_SYNC_DEVICE_CONFIG", targetIds: ids }))
+    expect(new Set(applied.map((a) => a.appliedAt)).size).toBe(1)
+    await c.runner.drain()
+    const obs = c.runtime.db.read((q) => c.runtime.evidence.observations(q, scope, ids))
+    const at = Date.parse(applied[0]!.appliedAt)
+    for (const o of obs) {
+      expect(Date.parse(o.occurredAt)).toBeGreaterThan(at)
+      expect(Date.parse(o.occurredAt) - at).toBeLessThanOrEqual(30_000)
+      expect(o.sequence).toBeGreaterThan(applied[0]!.priorSequence)
+    }
+    expect(Date.parse(c.runtime.db.read((q) => c.runtime.clock.telemetryNow(q, scope)))).toBeGreaterThanOrEqual(Math.max(...obs.map((o) => Date.parse(o.occurredAt))))
+  })
+
   it("telemetry retries produce one set of observations with monotonic sequences", async () => {
     const { c, scope, roster } = setup()
     const ids = roster.map((d) => d.id)
