@@ -13,8 +13,13 @@ import { WorkflowError, assertActiveGeneration, randomId } from "./util.js"
 
 const EmptyBody = z.union([z.undefined(), z.null(), z.object({}).strict()])
 
+/**
+ * The validated session actor. `requireRole` sets `res.locals.actor`; on routes open to
+ * both roles (GET /approvals) the platform's session middleware only sets
+ * `res.locals.session`, so fall back to its actor.
+ */
 function actorOf(res: Response): Actor | null {
-  const a = res.locals.actor as Actor | undefined
+  const a = (res.locals.actor ?? (res.locals.session as { actor?: Actor } | null | undefined)?.actor) as Actor | undefined
   return a && typeof a.id === "string" && (a.role === "operator" || a.role === "approver") ? a : null
 }
 

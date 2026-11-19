@@ -152,4 +152,4 @@ listed here for confirmation.
 1. Device `EvidenceView` has `id === deviceId` or `details.deviceId`. `ReadRequest.ids` for `kind: "device"` are device IDs.
 2. `LINK_SUPPORT_TICKETS` passes `targetIds = [primaryTicketId, ...duplicateIds]`, because `SimulationInput` has no args. The stored link is one of `details.duplicateOf | linkedTo | primaryTicketId | linkedTicketId`.
 3. `simulation.apply` raises an exception rather than double-applying when the same `actionId` is replayed. The workflow never replays it, because it checks its committed result first.
-4. The common session middleware sets `res.locals.actor` for `GET /approvals`. The route returns 401 without it.
+4. Confirmed on the combined build: the platform's session middleware sets `res.locals.session` (with `actor`), and `requireRole` sets `res.locals.actor`. Workflow routes read `res.locals.actor` first and fall back to `res.locals.session.actor`, so `GET /approvals` works for both roles. Without a session it returns 401.
