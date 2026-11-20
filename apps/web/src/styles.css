@@ -425,7 +425,7 @@ th { color: var(--navy); font-weight: 680; }
 .incident-facts dt { color: var(--muted); font-size: .7rem; font-weight: 720; text-transform: uppercase; letter-spacing: .05em; }
 .incident-facts dd { margin: 3px 0 0; font-size: .86rem; font-weight: 620; }
 .incident-facts dd small { display: block; font-weight: 450; color: var(--muted); font-size: .75rem; margin-top: 1px; }
-.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 14px; overflow-x: auto; }
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 14px; overflow: visible; }
 .tab { border: 0; background: transparent; color: var(--muted); font-size: .86rem; font-weight: 660; padding: 10px 14px; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
 .tab:hover { color: var(--navy); }
 .tab--active { color: var(--blue); border-bottom-color: var(--blue); }
@@ -528,7 +528,9 @@ button.ref-chip:hover { background: var(--sky); border-color: #9fcbe8; }
 /* ---------- Case review guide ---------- */
 .tab-n { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #e3ecf4; color: var(--muted); font-size: .72rem; font-weight: 760; margin-right: 7px; }
 .tab--active .tab-n { background: var(--cyan); color: #fff; }
-.tabs { flex-wrap: wrap; }
+.tabs { flex-wrap: wrap; overflow: visible; }
+.tabs .tab { position: relative; }
+.tabs .tab[data-tip]:hover::after, .tabs .tab[data-tip]:focus-visible::after { max-width: 300px; }
 .review-strip { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: #f1f9ff; border: 1px solid #bfe0f3; border-radius: 12px; padding: 8px 12px; margin-bottom: 14px; }
 .review-step { font-size: .7rem; font-weight: 760; letter-spacing: .07em; text-transform: uppercase; color: var(--blue); background: #fff; border-radius: 100px; padding: 4px 10px; white-space: nowrap; }
 .review-line { font-size: .92rem; flex: 1; min-width: 200px; }

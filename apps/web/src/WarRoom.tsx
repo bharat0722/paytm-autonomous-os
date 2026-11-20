@@ -419,7 +419,7 @@ export function WarRoom({ data, playbook, runs, deepEvidence, canResume, resumin
     <div className="tabs" role="tablist" aria-label="Incident sections">
       {tabs.map(([key, name, count]) => <button key={key} role="tab" id={`tab-${key}`} aria-selected={tab === key} aria-controls={`panel-${key}`}
         className={tab === key ? "tab tab--active" : "tab"} onClick={() => setTab(key)}
-        data-tip={`${REVIEW[key].shows} ${REVIEW[key].doThis}`} data-tip-pos="bottom"><span className="tab-n">{ORDER.indexOf(key) + 1}</span>{name}{count !== null && <span className="tab-count">{count}</span>}</button>)}
+        data-tip={REVIEW[key].shows} data-tip-pos="top"><span className="tab-n">{ORDER.indexOf(key) + 1}</span>{name}{count !== null && <span className="tab-count">{count}</span>}</button>)}
     </div>
 
     <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} className="tab-panel">
