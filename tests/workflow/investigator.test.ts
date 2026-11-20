@@ -98,7 +98,7 @@ describe("live investigator with guardrails", () => {
       () => ({ type: "tool", tool: "read_tickets", args: { ids: ["x"], extra: true } }),
       () => ({ type: "tool", tool: "fetch_url", args: { url: "http://example.com" } }),
     ])
-    const h = makeHarness({ provider })
+    const h = makeHarness({ provider, maxModelTurns: 8 })
     const id = h.inject("soundbox")
     await h.runUntil(id, ["APPROVAL_PENDING", "INSUFFICIENT_EVIDENCE", "ESCALATED"])
     const guard = h.view(id).trace.filter((t) => t.stage === "guardrail").map((t) => t.summary)
@@ -119,7 +119,7 @@ describe("live investigator with guardrails", () => {
   it("enforces the 45-second active episode budget", async () => {
     const provider = fakeProvider([() => ({ type: "tool", tool: "get_incident", args: {} })])
     let t = 0
-    const h = makeHarness({ provider, monotonicNow: () => (t += 20_000) })
+    const h = makeHarness({ provider, episodeBudgetMs: 45_000, monotonicNow: () => (t += 20_000) })
     const id = h.inject("soundbox")
     await h.runUntil(id, ["APPROVAL_PENDING"])
     const triageCalls = provider.calls.filter((c) => c.stage === "triage").length
@@ -132,7 +132,7 @@ describe("live investigator with guardrails", () => {
 
   it("persists consumed model turns across lease recovery", async () => {
     const provider = fakeProvider([() => ({ type: "tool", tool: "get_incident", args: {} })])
-    const h = makeHarness({ provider })
+    const h = makeHarness({ provider, maxModelTurns: 8 })
     const id = h.inject("soundbox")
     const job = h.runner.claim()!
     // Crash mid-episode: steal the lease after three model calls.

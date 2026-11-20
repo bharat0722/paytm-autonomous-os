@@ -17,7 +17,6 @@ import { ProviderError, StepSchema, type ModelProvider, type Stage, type Step, t
 import { scriptedStep } from "./scripted.js"
 import { TOOLS, describeTools, eligibleTools, runTool, type Proposal, type Snapshot, type ToolOutcome, type ToolState } from "./tools.js"
 
-const PER_CALL_TIMEOUT_MS = 20_000
 const EVIDENCE_KINDS = new Set(["device", "device_event", "ticket", "payment", "settlement", "merchant"])
 
 export function makeInvestigateHandler(core: CoreRuntime, options: WorkflowOptions) {
@@ -154,7 +153,7 @@ async function investigate(core: CoreRuntime, options: WorkflowOptions, job: Job
       }
       const t0 = options.monotonicNow()
       try {
-        raw = await callProvider(options.provider, ctx, Math.max(1, options.episodeBudgetMs - ep.active_ms))
+        raw = await callProvider(options.provider, ctx, Math.max(1, options.episodeBudgetMs - ep.active_ms), options.modelCallTimeoutMs)
       } catch (err) {
         ep = addActive(core, job, ep, options.monotonicNow() - t0)
         const reason = err instanceof ProviderError ? err.message : `Provider error (${(err as Error).name})`
@@ -208,10 +207,10 @@ function ensureEpisodeRow(core: CoreRuntime, tx: Parameters<Parameters<CoreRunti
   return getEpisode(tx, id)!
 }
 
-async function callProvider(provider: ModelProvider, ctx: StepContext, remainingMs: number): Promise<unknown> {
+async function callProvider(provider: ModelProvider, ctx: StepContext, remainingMs: number, perCallMs: number): Promise<unknown> {
   const started = Date.now()
   for (let attempt = 0; attempt < 2; attempt++) {
-    const budget = Math.min(PER_CALL_TIMEOUT_MS, remainingMs - (Date.now() - started))
+    const budget = Math.min(perCallMs, remainingMs - (Date.now() - started))
     if (budget <= 0) throw new ProviderError("Provider call exceeded the episode budget", false)
     const ac = new AbortController()
     let timer: NodeJS.Timeout | undefined

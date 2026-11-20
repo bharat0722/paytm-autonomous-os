@@ -13,6 +13,8 @@ export interface WorkflowOptions {
   verifyWindowMs: number
   maxModelTurns: number
   episodeBudgetMs: number
+  /** Time allowed for one call to the live model before it is retried or abandoned. */
+  modelCallTimeoutMs: number
   maxScriptedSteps: number
   /** Monotonic milliseconds for the active-episode budget. */
   monotonicNow: () => number
@@ -22,8 +24,9 @@ export const DEFAULT_OPTIONS: Omit<WorkflowOptions, "provider" | "providerUnavai
   approvalTtlMs: 5 * 60_000,
   verifyIntervalMs: 2_000,
   verifyWindowMs: 60_000,
-  maxModelTurns: 8,
-  episodeBudgetMs: 45_000,
+  maxModelTurns: 14,
+  episodeBudgetMs: 120_000,
+  modelCallTimeoutMs: 45_000,
   maxScriptedSteps: 16,
   monotonicNow: () => performance.now(),
 }
@@ -63,5 +66,8 @@ export function optionsFromEnv(env: NodeJS.ProcessEnv = process.env): WorkflowOp
     approvalTtlMs: intEnv(env, "WORKFLOW_APPROVAL_TTL_SECONDS", 300) * 1000,
     verifyIntervalMs: intEnv(env, "WORKFLOW_VERIFY_INTERVAL_MS", DEFAULT_OPTIONS.verifyIntervalMs),
     verifyWindowMs: intEnv(env, "WORKFLOW_VERIFY_WINDOW_MS", DEFAULT_OPTIONS.verifyWindowMs),
+    maxModelTurns: intEnv(env, "WORKFLOW_MAX_MODEL_TURNS", DEFAULT_OPTIONS.maxModelTurns),
+    episodeBudgetMs: intEnv(env, "WORKFLOW_EPISODE_BUDGET_SECONDS", DEFAULT_OPTIONS.episodeBudgetMs / 1000) * 1000,
+    modelCallTimeoutMs: intEnv(env, "WORKFLOW_MODEL_CALL_TIMEOUT_SECONDS", DEFAULT_OPTIONS.modelCallTimeoutMs / 1000) * 1000,
   }
 }

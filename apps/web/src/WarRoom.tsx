@@ -1,8 +1,8 @@
 import { ProcessPlaybook } from "./Playbook.js"
 import { RunsPanel } from "./Runs.js"
-import { useMemo, useState } from "react"
+import { useMemo, useState, type ReactNode } from "react"
 import type {
-  ActionView, AuditEntry, DeviceCheck, EvidenceView, GroupingView, IncidentView, PlaybookView, RecoveryView, RunsView, TraceEntry,
+  ActionView, AuditEntry, DeviceCheck, EvidenceView, GroupingView, IncidentStatus, IncidentView, PlaybookView, RecoveryView, RunsView, TraceEntry,
 } from "../../../shared/contracts/http.js"
 import { CopyId, Dialog, EmptyState, Icon, IncidentBadge, Info, SectionHeader, StatusBadge, Time } from "./ui.js"
 import { approvalPresentation, approvalsHref, incidentHref, incidentPresentation, label, modes, number, scenarios, traceSummary } from "./workspace.js"
@@ -143,6 +143,36 @@ function MerchantRecords({ merchantId, records, open }: { merchantId: string; re
     <ul className="record-list">{related.map((r) => <li key={r.id}><button onClick={() => open(r.id)}>
       <Icon name="file" size={16}/><span><strong>{r.title}</strong><small>{evidenceKinds[r.kind]}{r.occurredAt ? " · " : ""}{r.occurredAt && <Time value={r.occurredAt}/>}</small></span><Icon name="chevron" size={15}/>
     </button></li>)}</ul></div>
+}
+
+/** The order a reviewer follows to check one case, and what each tab shows and asks of them. */
+const REVIEW: Record<Tab, { name: string; shows: string; doThis: string }> = {
+  overview: { name: "Overview", shows: "What happened, which job found it, who it affects, and the AI's one-line summary.", doThis: "Read the header and “What the job found”. Check the status. If something looks off, go to Evidence." },
+  evidence: { name: "Evidence", shows: "Every record the AI was allowed to read: tickets, devices, payments, settlements.", doThis: "Click an ID to open the full record. Filter by type. Confirm the facts match what the AI said." },
+  investigation: { name: "Process", shows: "Each step taken, in order, who did it (AI, rules, system) and its status.", doThis: "Open a step to see what we sent and what came back. Look for any step marked Needs attention." },
+  jobs: { name: "Jobs and runs", shows: "The monitor that found the case, the background jobs with their IDs, the AI runs, and the timers and limits.", doThis: "Check the Job ID, that each job finished, and whether the AI ran live or as a script." },
+  actions: { name: "Actions & approvals", shows: "Every fix the AI proposed or ran, the rule that allowed it, and any approval.", doThis: "Check each action has a rule. If an approval is waiting, the Approver decides it on the Approvals page." },
+  audit: { name: "Audit log", shows: "The permanent record: who did what, and when.", doThis: "Confirm the approver and the timestamps. This is the proof for any later question." },
+}
+const ORDER: Tab[] = ["overview", "evidence", "investigation", "jobs", "actions", "audit"]
+
+function ReviewStrip({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
+  const [hidden, setHidden] = useState(() => { try { return localStorage.getItem("mros.review.hidden") === "1" } catch { return false } })
+  const i = ORDER.indexOf(tab)
+  const info = REVIEW[tab]
+  const prev = ORDER[i - 1]
+  const next = ORDER[i + 1]
+  function toggle(h: boolean) { setHidden(h); try { localStorage.setItem("mros.review.hidden", h ? "1" : "0") } catch { /* ignore */ } }
+  if (hidden) return <button className="text-button review-show" onClick={() => toggle(false)}>Show the review guide</button>
+  return <section className="review-strip" aria-label="Review guide">
+    <div className="review-head"><span className="review-step">Step {i + 1} of {ORDER.length}</span><strong>{info.name}</strong>
+      <button className="text-button" onClick={() => toggle(true)} data-tip="Hide this guide. You can show it again." data-tip-pos="bottom-end">Hide guide</button></div>
+    <div className="review-cols"><p><span>This tab shows</span>{info.shows}</p><p><span>What to do here</span>{info.doThis}</p></div>
+    <div className="review-nav">
+      {prev ? <button className="button button--quiet button--small" onClick={() => setTab(prev)}>← Back: {REVIEW[prev].name}</button> : <span/>}
+      {next ? <button className="button button--primary button--small" onClick={() => setTab(next)}>Next: {REVIEW[next].name} →</button> : <span className="muted">That is the full review.</span>}
+    </div>
+  </section>
 }
 
 /** Which job found what: record counts by type and the tickets involved, in plain words. */
@@ -348,7 +378,7 @@ export function WarRoom({ data, playbook, runs, deepEvidence, canResume, resumin
         <div className="chip-row">
           {inconsistent ? <StatusBadge text="Verification needs review" tone="red"/> : <span data-testid="incident-status"><IncidentBadge status={incident.status}/></span>}
           <StatusBadge text={`${label(incident.severity)} severity`} tone={severityTone[incident.severity]}/>
-          {canResume && <button className="button button--quiet button--small" onClick={resume} disabled={resuming}>{resuming ? "Queuing…" : "Resume investigation"}</button>}
+          {canResume && <button className="button button--quiet button--small" onClick={resume} disabled={resuming} data-tip="Ask the AI to try this investigation again." data-tip-pos="bottom-end">{resuming ? "Queuing…" : "Resume investigation"}</button>}
         </div>
       </div>
       {profile && <p className="incident-description">{profile.description}</p>}
@@ -364,15 +394,17 @@ export function WarRoom({ data, playbook, runs, deepEvidence, canResume, resumin
 
     <div className="tabs" role="tablist" aria-label="Incident sections">
       {tabs.map(([key, name, count]) => <button key={key} role="tab" id={`tab-${key}`} aria-selected={tab === key} aria-controls={`panel-${key}`}
-        className={tab === key ? "tab tab--active" : "tab"} onClick={() => setTab(key)}>{name}{count !== null && <span className="tab-count">{count}</span>}</button>)}
+        className={tab === key ? "tab tab--active" : "tab"} onClick={() => setTab(key)}
+        data-tip={`${REVIEW[key].shows} ${REVIEW[key].doThis}`} data-tip-pos="bottom"><span className="tab-n">{ORDER.indexOf(key) + 1}</span>{name}{count !== null && <span className="tab-count">{count}</span>}</button>)}
     </div>
 
     <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} className="tab-panel">
+      <ReviewStrip tab={tab} setTab={setTab}/>
       {tab === "overview" && <>
         {inconsistent && <div role="alert" className="callout callout--red"><Icon name="alert"/><div><strong>Recovery could not be confirmed</strong><p>The latest stored verification is incomplete.</p></div></div>}
         {pending && <div className="callout callout--amber"><Icon name="shield"/><div><strong>Human approval required</strong>
           <p>{pending.targetDeviceIds.length} {pending.targetDeviceIds.length === 1 ? "device needs" : "devices need"} a remote restart before recovery can complete.</p></div>
-          <a className="button button--secondary" href={approvalsHref(pending.id)}>Review approval <Icon name="forward" size={15}/></a></div>}
+          <a className="button button--secondary" href={approvalsHref(pending.id)} data-tip="Open the approval. Only the Approver can decide it." data-tip-pos="bottom-end">Review approval <Icon name="forward" size={15}/></a></div>}
         {!pending && (blocker || owner) && <div className="callout"><Icon name="alert"/><div><strong>{owner ? `Assigned to ${owner}` : "Investigation note"}</strong>{blocker && <p>{blocker}</p>}</div></div>}
         {recovery ? <RecoveryProgress recovery={recovery} closed={closed}/> :
           <section className="card outcome-placeholder"><Icon name={incident.scenario === "soundbox" ? "verify" : "stack"}/>

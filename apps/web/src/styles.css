@@ -523,3 +523,19 @@ button.ref-chip:hover { background: var(--sky); border-color: #9fcbe8; }
 .found-by .table-wrap { margin-top: 4px; }
 .tech-trace { margin-top: 14px; }
 .tech-trace > summary { padding: 4px 0; }
+
+
+/* ---------- Case review guide ---------- */
+.tab-n { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #e3ecf4; color: var(--muted); font-size: .72rem; font-weight: 760; margin-right: 7px; }
+.tab--active .tab-n { background: var(--cyan); color: #fff; }
+.tabs { flex-wrap: wrap; }
+.review-strip { background: #f1f9ff; border: 1px solid #bfe0f3; border-radius: 14px; padding: 14px 16px; margin-bottom: 14px; display: grid; gap: 10px; }
+.review-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.review-head .text-button { margin-left: auto; }
+.review-step { font-size: .7rem; font-weight: 760; letter-spacing: .07em; text-transform: uppercase; color: var(--blue); background: #fff; border-radius: 100px; padding: 4px 10px; }
+.review-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.review-cols p { font-size: .9rem; display: grid; gap: 2px; }
+.review-cols span { font-size: .68rem; font-weight: 740; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.review-nav { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.review-show { margin-bottom: 10px; }
+@media (max-width: 720px) { .review-cols { grid-template-columns: 1fr; } }
