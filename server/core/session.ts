@@ -27,7 +27,10 @@ export function parseCookies(header: string | undefined): Record<string, string>
 }
 
 export class SessionStore {
-  constructor(private readonly db: CoreDb, private readonly clock: Clock, private readonly secret: string, private readonly ttlHours: number) {}
+  constructor(
+    private readonly db: CoreDb, private readonly clock: Clock, private readonly secret: string,
+    private readonly ttlHours: number, private readonly secure = false
+  ) {}
 
   /** Server-side role check: the role is granted only if the access code matches. */
   create(role: Role): { record: SessionRecord; cookieValue: string } {
@@ -54,6 +57,7 @@ export class SessionStore {
   }
 
   cookieHeader(value: string): string {
-    return `${SESSION_COOKIE}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${this.ttlHours * 3600}`
+    const secure = this.secure ? "; Secure" : ""
+    return `${SESSION_COOKIE}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${this.ttlHours * 3600}${secure}`
   }
 }

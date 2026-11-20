@@ -55,7 +55,7 @@ export function createApp(options: AppOptions): CoreApp {
   ensureBootstrapped(db, clock)
   const runtime = createCoreRuntime(db, clock)
   const workflow = options.createWorkflow ? options.createWorkflow(runtime) : null
-  const sessions = new SessionStore(db, clock, options.config.sessionSecret, options.config.sessionTtlHours)
+  const sessions = new SessionStore(db, clock, options.config.sessionSecret, options.config.sessionTtlHours, options.config.secureCookies)
 
   // Explicit job registry: core registers telemetry; the workflow supplies its own kinds.
   const registry: Partial<Record<JobKind, JobHandler>> = {
@@ -75,6 +75,10 @@ export function createApp(options: AppOptions): CoreApp {
   })
 
   const api = Router()
+  api.use((_req, res, next) => {
+    res.setHeader("Cache-Control", "private, no-store")
+    next()
+  })
   api.use(express.json({ limit: "16kb", strict: true }))
 
   // Session discovery on every request.
