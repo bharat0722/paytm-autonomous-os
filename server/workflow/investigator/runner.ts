@@ -181,6 +181,12 @@ async function investigate(core: CoreRuntime, options: WorkflowOptions, job: Job
         ep = recordRejected(core, job, scope, ep, history, step, problem)
         continue
       }
+      // A live model that finishes without proposing any allowed action would leave the case stuck at
+      // "more evidence needed". Hand the same case to the scripted path instead, visibly and with the reason.
+      if (ep.mode === "live_ai" && !state.proposal) {
+        ep = switchToFallback(core, job, scope, ep, "live model reported a finding but proposed no allowed action, so the scripted path completes the safe step")
+        continue
+      }
       finalize(core, options, job, scope, stage, state, ep, step.finding)
       return
     }

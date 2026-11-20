@@ -57,6 +57,28 @@ describe("live investigator with guardrails", () => {
     expect(JSON.stringify(provider.calls[0]!.tools)).not.toMatch(/approve_restart/)
   })
 
+  it("a live model that reports 'missing evidence' without proposing anything falls back and still completes", async () => {
+    let deviceIds: string[] = []
+    const provider = fakeProvider([
+      (ctx) => ({ type: "tool", tool: "read_devices", args: { ids: ctx.incident.cohortDeviceIds } }),
+      (ctx) => {
+        deviceIds = ((lastResult(ctx)!.untrusted_records as { id: string }[]) ?? []).map((r) => r.id)
+        return { type: "finding", finding: { observations: ["Read the devices."], hypothesis: null, evidenceIds: deviceIds.slice(0, 2), uncertainty: "Not enough to act.", missingEvidence: ["Device events for the remaining devices"] } }
+      },
+    ])
+    const h = makeHarness({ provider })
+    const id = h.inject("soundbox")
+    await h.runUntil(id, ["APPROVAL_PENDING", "INSUFFICIENT_EVIDENCE", "ESCALATED", "FAILED"])
+    // Not stuck: the scripted path proposed the allowed sync, the verifier checked it, and a restart approval followed.
+    expect(h.status(id)).toBe("APPROVAL_PENDING")
+    const trace = h.view(id).trace
+    expect(trace.some((t) => t.mode === "live_ai" && t.tool === "read_devices")).toBe(true)
+    const fallback = trace.find((t) => /proposed no allowed action/.test(t.summary))
+    expect(fallback?.mode).toBe("scripted_fallback")
+    expect(trace.some((t) => t.mode === "scripted_fallback" && /propose_config_sync/.test(t.summary))).toBe(true)
+    expect(h.status(id)).not.toBe("INSUFFICIENT_EVIDENCE")
+  })
+
   it("provider failure falls back visibly to the scripted path and still completes the workflow", async () => {
     const provider: ModelProvider = { name: "down", next: async () => { throw new ProviderError("Provider HTTP 403", false) } }
     const h = makeHarness({ provider })
