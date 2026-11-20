@@ -363,13 +363,22 @@ export const TOOLS: Record<string, AnyTool> = Object.fromEntries([
 
 const TRIAGE_READS = ["get_incident", "read_devices", "read_device_events", "read_merchants", "read_tickets", "read_payments", "read_settlements"]
 const ORDER_TRIAGE_READS = ["get_incident", "read_orders", "read_webhook_log", "check_pg_status", "read_merchants", "read_tickets"]
+const READS_BY_SCENARIO: Record<string, string[]> = {
+  soundbox: ["get_incident", "read_devices", "read_device_events", "read_merchants", "read_tickets", "read_payments"],
+  "duplicate-tickets": ["get_incident", "read_tickets", "read_merchants"],
+  "settlement-discrepancy": ["get_incident", "read_settlements", "read_tickets", "read_merchants", "read_payments"],
+  "order-unpaid": ORDER_TRIAGE_READS,
+}
 const CONTINUATION_READS = ["get_recovery_snapshot", "read_devices", "read_device_events"]
 
 /** Only the next stage's eligible tools are exposed. Proposals unlock after a real read. */
 export function eligibleTools(state: ToolState, stage: Stage): string[] {
   if (state.proposal) return []
   const scenario = state.incident.card.scenario
-  const reads = stage === "triage" ? (scenario === "order-unpaid" ? ORDER_TRIAGE_READS : TRIAGE_READS) : CONTINUATION_READS
+  // Each case type is offered only the lookups that fit it, and a lookup already done is not offered again.
+  // At real data volumes the AI must not re-read the same records over and over.
+  const base = stage === "triage" ? (READS_BY_SCENARIO[scenario] ?? TRIAGE_READS) : CONTINUATION_READS
+  const reads = base.filter((name) => !state.used.has(name))
   const hasRead = state.retrieved.size > 0 || state.citable.size > 0
   if (!hasRead) return reads
   let proposals: string[] = []
