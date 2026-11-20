@@ -131,6 +131,7 @@ export const modes: Record<Mode, [string, Tone]> = {
 }
 
 export const scenarios: Record<Scenario, string> = {
+  "payment-confirmation": "Payment confirmation",
   soundbox: "Soundbox", "duplicate-tickets": "Duplicate tickets", "settlement-discrepancy": "Settlement discrepancy",
 }
 

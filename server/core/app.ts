@@ -4,8 +4,9 @@ import { existsSync } from "node:fs"
 import { resolve } from "node:path"
 import { ZodError } from "zod"
 import {
-  DemoInjectSchema, DemoSignInSchema, ScenarioSchema, type Role, type SessionView
+  DemoInjectSchema, DemoScenarioSchema, DemoSignInSchema, type Role, type SessionView
 } from "../../shared/contracts/http.js"
+import { SandboxPaymentSignalSchema } from "../../shared/contracts/payment-confirmation.js"
 import { CoreError, type CoreRuntime, type JobHandler, type JobKind, type WorkflowFactory, type WorkflowModule } from "../../shared/contracts/core.js"
 import type { CoreConfig } from "./config.js"
 import { openDb, type CoreDb } from "./db.js"
@@ -16,6 +17,7 @@ import { auditView, dashboardView, incidentView } from "./readmodels.js"
 import { metricsView } from "./metrics.js"
 import { detectionJobsView } from "./profile.js"
 import { jobById } from "./datasets.js"
+import { acceptSandboxPaymentSignal, detectPaymentMismatch } from "./payment-confirmation.js"
 import { createCoreRuntime } from "./runtime.js"
 import { SessionStore, safeEqual, type SessionRecord } from "./session.js"
 import { emitTelemetry } from "./simulation.js"
@@ -58,7 +60,8 @@ export function createApp(options: AppOptions): CoreApp {
   // Explicit job registry: core registers telemetry; the workflow supplies its own kinds.
   const registry: Partial<Record<JobKind, JobHandler>> = {
     ...(workflow?.handlers ?? {}),
-    "core.telemetry": async (job) => { db.write((tx) => emitTelemetry(tx, job)) }
+    "core.telemetry": async (job) => { db.write((tx) => emitTelemetry(tx, job)) },
+    "core.payment_detect": async (job) => { db.write((tx) => detectPaymentMismatch(tx, clock, job)) }
   }
   const runner = new JobRunner(db, clock, registry)
 
@@ -130,9 +133,15 @@ export function createApp(options: AppOptions): CoreApp {
   })
 
   api.post("/demo/inject/:scenario", requireRole("operator"), (req, res) => {
-    const scenario = ScenarioSchema.parse(req.params.scenario)
+    const scenario = DemoScenarioSchema.parse(req.params.scenario)
     const { variant } = DemoInjectSchema.parse(req.body ?? {})
     send(res, injectScenario(db, clock, res.locals.generation as number, scenario, variant))
+  })
+
+  api.post("/demo/payment-signals", requireRole("operator"), (req, res) => {
+    const signal = SandboxPaymentSignalSchema.parse(req.body)
+    const actor = res.locals.actor as SessionRecord["actor"]
+    send(res, acceptSandboxPaymentSignal(db, clock, res.locals.generation as number, actor.id, signal), 202)
   })
 
   api.get("/dashboard", (req, res) => {

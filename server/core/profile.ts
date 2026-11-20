@@ -25,7 +25,7 @@ export function jobForIncident(q: Sql, incidentId: string): DetectionJob | null 
     const jobId = (JSON.parse(row.correlation_json) as { jobId?: string }).jobId
     if (jobId && jobById(jobId)) return jobById(jobId)!
   } catch { /* fall through */ }
-  return (row.batch_key && jobByBatchKey(row.batch_key)) || defaultJobFor(row.scenario as DetectionJob["scenario"])
+  return ((row.batch_key && jobByBatchKey(row.batch_key)) || defaultJobFor(row.scenario as DetectionJob["scenario"])) ?? null
 }
 
 export function incidentProfile(q: Sql, scope: Scope): IncidentProfile | null {
