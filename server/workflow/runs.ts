@@ -37,10 +37,10 @@ export function getRuns(core: CoreRuntime, q: Sql, scope: Scope, o: WorkflowOpti
   }))
   const secs = (ms: number) => `${Math.round(ms / 1000)} s`
   const schedules: ScheduleView[] = [
-    { id: "verify", title: "Re-check after a fix", value: `every ${secs(o.verifyIntervalMs)}`, detail: `for up to ${secs(o.verifyWindowMs)}, then it counts as failed` },
-    { id: "approval", title: "Approval time limit", value: `${Math.round(o.approvalTtlMs / 60_000)} min`, detail: "if nobody decides, the action never runs" },
-    { id: "ai", title: "AI investigation limit", value: `${o.maxModelTurns} steps`, detail: `or ${secs(o.episodeBudgetMs)}, whichever comes first` },
-    { id: "retry", title: "Job retries", value: `${CORE_DEFAULTS.jobMaxAttempts} tries`, detail: `a worker holds a job for ${secs(CORE_DEFAULTS.jobLeaseMs)}; a crash hands it to another` },
+    { id: "verify", title: "Re-check after a fix", value: `every ${secs(o.verifyIntervalMs)}`, detail: `up to ${secs(o.verifyWindowMs)}` },
+    { id: "approval", title: "Approval time limit", value: `${Math.round(o.approvalTtlMs / 60_000)} min`, detail: "or the action never runs" },
+    { id: "ai", title: "AI investigation limit", value: `${o.maxModelTurns} steps`, detail: `or ${secs(o.episodeBudgetMs)} max` },
+    { id: "retry", title: "Job retries", value: `${CORE_DEFAULTS.jobMaxAttempts} tries`, detail: "crashed jobs are retried" },
   ]
   return { generation: scope.generation, incidentId: scope.incidentId, jobs, runs, schedules }
 }

@@ -32,7 +32,7 @@ export function getPlaybook(core: CoreRuntime, q: Sql, scope: Scope): PlaybookVi
     const entries = s.id === "close" ? (closeEntry ? [closeEntry] : []) : log.filter((e) => e.stepId === s.id)
     let status: StepStatus
     if (entries.length) {
-      const failed = entries.some((e) => e.outcome === "FAILED" || e.outcome === "BLOCKED")
+      const failed = entries.some((e) => (e.outcome === "FAILED" || e.outcome === "BLOCKED") && e.system !== "Guardrail")
       const hasWait = entries.some((e) => e.kind === "wait")
       const decided = entries.some((e) => e.kind === "decision" && e.stepId === "approve")
       if (s.kind === "investigate" && !entries.some((e) => e.kind === "result")) status = terminal ? "done" : "active"

@@ -129,7 +129,17 @@ async function investigate(core: CoreRuntime, options: WorkflowOptions, job: Job
   })
 
   // 3. Step loop.
+  let scriptHandover = false
   for (;;) {
+    // The script must not trust a live model's empty reads: re-read anything that came back with no records.
+    if (ep.mode !== "live_ai" && !scriptHandover) {
+      scriptHandover = true
+      const kindOf: Record<string, string> = { read_devices: "device", read_device_events: "device_event", read_merchants: "merchant", read_tickets: "ticket",
+        read_payments: "payment", read_settlements: "settlement", read_orders: "order", read_webhook_log: "webhook_attempt", check_pg_status: "pg_transaction" }
+      for (const [tool, kind] of Object.entries(kindOf)) {
+        if (state.used.has(tool) && ![...state.retrieved.values()].some((e) => e.kind === kind)) state.used.delete(tool)
+      }
+    }
     const eligible = eligibleTools(state, stage)
     let raw: unknown
     if (ep.mode === "live_ai" && options.provider) {
@@ -162,7 +172,8 @@ async function investigate(core: CoreRuntime, options: WorkflowOptions, job: Job
       }
       ep = addActive(core, job, ep, options.monotonicNow() - t0)
     } else {
-      if (ep.steps_used >= options.maxScriptedSteps) {
+      // Only the script's own steps count against its budget; the live model's turns were already limited separately.
+      if (ep.steps_used - ep.turns_used >= options.maxScriptedSteps) {
         failEpisode(core, job, scope, ep, stage, "Investigation step budget exhausted without a finding.")
         return
       }
@@ -314,8 +325,8 @@ function recordRejected(core: CoreRuntime, job: Job, scope: Scope, ep: EpisodeRo
     })
     addProcessLog(tx, scope, `${ep.episode_key}:step:${stepNo}`, {
       at: core.clock.now(), stepId: readStepId(ep.stage === "continuation" ? "continuation" : "triage"), kind: "decision", system: "Guardrail",
-      method: "REJECT", endpoint: "validateStep", request: truncate(JSON.stringify(step ?? null), 400), response: { error }, outcome: "BLOCKED",
-      summary: `Rejected step: ${truncate(error, 240)}`,
+      method: "CATCH", endpoint: "validateStep", request: truncate(JSON.stringify(step ?? null), 400), response: { error, handled: "the AI was asked again" }, outcome: "INFO",
+      summary: `Guardrail caught a malformed AI output and asked again (${truncate(error, 160)})`,
     })
     tx.run("UPDATE wf_episodes SET steps_used = steps_used + 1 WHERE id = ?", [ep.id])
     return getEpisode(tx, ep.id)!

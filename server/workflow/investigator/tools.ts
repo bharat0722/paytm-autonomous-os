@@ -82,8 +82,13 @@ function readTool(name: string, kind: EvidenceKind, label: string): ToolDef<Read
     argsDoc: '{"ids"?: string[], "limit"?: number (1-100)}',
     schema: ReadArgs,
     run(q, state, args) {
-      const records = state.core.evidence.read(q, state.scope, { kind, ids: args.ids, limit: args.limit ?? 100 })
+      let records = state.core.evidence.read(q, state.scope, { kind, ids: args.ids, limit: args.limit ?? 100 })
         .filter((r) => r.kind === kind)
+      // A model that guesses record ids gets nothing back and wrongly concludes there is no evidence.
+      // Reads are already scoped to this incident, so fall back to everything linked to it.
+      if (!records.length && args.ids?.length) {
+        records = state.core.evidence.read(q, state.scope, { kind, limit: args.limit ?? 100 }).filter((r) => r.kind === kind)
+      }
       const ids = records.map((r) => r.id)
       return {
         ok: true,

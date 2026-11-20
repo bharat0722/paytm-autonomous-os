@@ -42,9 +42,9 @@ function Login({ initialRole, onSignIn, button = "Sign in" }: {
 }
 
 const navTips: Record<string, string> = {
-  mission: "The overview: open incidents, scheduled detection jobs and results.",
-  incident: "Every incident, and one case in detail with its steps and proof.",
-  approvals: "Where a person says yes or no to risky actions the AI asks for.",
+  mission: "The command center: every merchant problem caught, what was fixed automatically, and what needs a person.",
+  incident: "One case end to end: what broke, how the AI fixed it, and the proof it worked.",
+  approvals: "The human-in-the-loop gate. Risky fixes wait here for sign-off. Nothing risky runs without it.",
 }
 const nav: { view: "mission" | "incident" | "approvals"; name: string; icon: IconName }[] = [
   { view: "mission", name: "Overview", icon: "grid" },
@@ -77,10 +77,10 @@ function WorkspaceFrame({ view, session, lastIncident, onSwitch, onReset, childr
       <header className="topbar">
         <div className="breadcrumb"><span>Workspace</span><Icon name="chevron" size={13}/><strong>{nav.find((item) => item.view === view)?.name}</strong></div>
         <div className="top-actions">
-          {view !== "mission" && role === "operator" && <button className="button button--quiet top-reset" onClick={onReset} data-tip="Wipe this sandbox and start clean. Use it before every run." data-tip-pos="bottom-end"><Icon name="reset" size={16}/>Reset sandbox</button>}
-          <span className="env-badge" data-tip="All data is made up. No real Paytm system or money is touched." data-tip-pos="bottom-end"><i aria-hidden="true"/>Sandbox</span>
+          {view !== "mission" && role === "operator" && <button className="button button--quiet top-reset" onClick={onReset} data-tip="Wipe the demo data and start a clean run. For rehearsals." data-tip-pos="bottom-end"><Icon name="reset" size={16}/>Reset sandbox</button>}
+          <span className="env-badge" data-tip="Demo environment: synthetic data only. No real Paytm system, device or money is touched." data-tip-pos="bottom-end"><i aria-hidden="true"/>Sandbox</span>
           <span className="role-label"><Icon name="user" size={16}/>{role ? label(role) : "Not signed in"}</span>
-          {role && <button className="button button--quiet switch-role" onClick={onSwitch} data-tip="Sign in again as the other role. Operator starts cases; Approver says yes to risky steps." data-tip-pos="bottom-end">Switch role</button>}
+          {role && <button className="button button--quiet switch-role" onClick={onSwitch} data-tip="Two roles, separate people: the Operator runs cases, the Approver signs off risky fixes. Separation of duties." data-tip-pos="bottom-end">Switch role</button>}
         </div>
       </header>
       <main className="main-content" id="main-content" tabIndex={-1}>{children}</main>
@@ -297,7 +297,7 @@ export function App() {
         <div className="page-heading mission-heading">
           <div><h1>Operations overview</h1><p>Merchant device, support and settlement incidents across all zones.</p></div>
           {canOperate && <div className="mission-controls">
-            <button className="button button--quiet" onClick={() => { setError(undefined); setDialog("reset") }} disabled={Boolean(busy)} data-tip="Wipe this sandbox and start clean. Use it before every run." data-tip-pos="bottom"><Icon name="reset" size={16}/> Reset sandbox</button>
+            <button className="button button--quiet" onClick={() => { setError(undefined); setDialog("reset") }} disabled={Boolean(busy)} data-tip="Wipe the demo data and start a clean run. For rehearsals." data-tip-pos="bottom"><Icon name="reset" size={16}/> Reset sandbox</button>
           </div>}
         </div>
         {dashboard.error && <InlineError problem={dashboard.error} retry={dashboard.refresh}/>}

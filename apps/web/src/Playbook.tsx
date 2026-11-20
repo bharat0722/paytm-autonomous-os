@@ -8,9 +8,9 @@ const statusText: Record<StepStatus, [string, Tone]> = {
   pending: ["Not started", "neutral"], skipped: ["Not needed", "neutral"],
 }
 const automationText: Record<PlaybookStepView["automation"], [string, string]> = {
-  automatic: ["Automatic", "The AI does this by itself."],
-  "policy-gated": ["Rules decide", "A written rule must allow this before it happens."],
-  human: ["A person decides", "Only a person can do this step."],
+  automatic: ["Automatic", "The AI does this step by itself. No human needed."],
+  "policy-gated": ["Rules decide", "A written rule must allow this first. This is the control layer."],
+  human: ["A person decides", "Risky actions wait here for human sign-off."],
   system: ["System check", "The system checks this on its own, without the AI."],
 }
 const statusIcon: Record<StepStatus, IconName> = { done: "check", failed: "alert", active: "timer", waiting: "user", pending: "list", skipped: "back" }
@@ -28,13 +28,15 @@ function HttpChip({ status }: { status: number | null }) {
 }
 
 function Call({ entry, openEvidence }: { entry: ProcessEntry; openEvidence: (id: string) => void }) {
-  const tone: Tone = entry.outcome === "FAILED" || entry.outcome === "BLOCKED" ? "red" : entry.outcome === "INFO" ? "neutral" : "green"
+  const guard = entry.system === "Guardrail"
+  const tone: Tone = guard ? "neutral" : entry.outcome === "FAILED" ? "red" : entry.outcome === "BLOCKED" ? "amber" : entry.outcome === "INFO" ? "neutral" : "green"
+  const chip = guard ? "Caught · safe" : entry.outcome === "OK" ? "OK" : entry.outcome === "INFO" ? "Info" : entry.outcome === "BLOCKED" ? "Stopped by rule" : "Failed"
   return <li className="call">
     <div className="call-head">
       <span className="method">{entry.method}</span>
       <code className="endpoint">{entry.endpoint}</code>
       <HttpChip status={entry.httpStatus}/>
-      <StatusBadge text={entry.outcome === "OK" ? "OK" : entry.outcome === "INFO" ? "Info" : entry.outcome === "BLOCKED" ? "Blocked" : "Failed"} tone={tone}/>
+      <StatusBadge text={chip} tone={tone}/>
       <Time value={entry.at} clock/>
     </div>
     <p className="call-summary"><strong>{entry.system}</strong> · {entry.summary}</p>
@@ -57,7 +59,7 @@ function Step({ step, expandAll, openEvidence }: { step: PlaybookStepView; expan
         <span className="pb-name">{step.title}</span>
         <StatusBadge text={label} tone={tone}/>
         <span className="pb-auto" data-tip={autoTip} data-tip-pos="top">{auto}</span>
-        {calls.length > 0 && <span className="pb-count" data-tip="Open to see exactly what we sent and what came back." data-tip-pos="top">{calls.length} {calls.length === 1 ? "call" : "calls"}</span>}
+        {calls.length > 0 && <span className="pb-count" data-tip="Open for the proof: exactly what the system sent and what came back." data-tip-pos="top">{calls.length} {calls.length === 1 ? "call" : "calls"}</span>}
       </summary>
       <div className="pb-inner">
         <p className="pb-desc">{step.description}</p>
