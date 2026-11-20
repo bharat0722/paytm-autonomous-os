@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "npm ci --ignore-scripts",
+  "buildCommand": "npm run build -- --base=/app/ --outDir=../../dist/vercel-site/app && cp index.html dist/vercel-site/index.html",
+  "outputDirectory": "dist/vercel-site",
+  "rewrites": [
+    { "source": "/api/v1/:path*", "destination": "https://merchant-reliability-api-production.up.railway.app/api/v1/:path*" },
+    { "source": "/app", "destination": "/app/index.html" }
+  ]
+}

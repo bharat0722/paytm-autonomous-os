@@ -200,7 +200,7 @@ test("three clean Soundbox runs recover 20 of 24, preserve the pending decision,
       const proposal = queue.approvals[0]!
       expect(proposal.targetDeviceIds).toEqual(pending.workflow.recovery!.remainingDeviceIds)
       await expect(operator.getByRole("heading", { name: "What the AI found" })).toBeVisible()
-      await expect(operator.getByTestId("ai-engine")).toHaveText(/Scripted fallback/)
+      await expect(operator.getByTestId("ai-engine")).toHaveText("Backup script (fixed steps)")
 
       if (run === 0) {
         await app.restart()
@@ -408,9 +408,13 @@ test.describe("scripted fallback", () => {
     const { id } = await startSoundbox(page)
     const incident = await apiRead<IncidentView>(page, app.origin, "/incidents/" + id)
     expect(incident.workflow.trace.some((entry) => entry.mode === "scripted_fallback")).toBe(true)
-    await expect(page.getByTestId("ai-engine")).toHaveText(/Scripted fallback/)
-    await page.getByRole("tab", { name: /Investigation/ }).click()
-    await expect(page.getByText(/No model configured for this test/).first()).toBeVisible()
+    await expect(page.getByTestId("ai-engine")).toHaveText("Backup script (fixed steps)")
+    expect(incident.workflow.trace.some((entry) => entry.summary.includes("No model configured for this test"))).toBe(true)
+    await page.getByRole("tab", { name: /Process/ }).click()
+    await expect(page.getByRole("heading", { name: "How this incident is solved" })).toBeVisible()
+    await page.getByRole("tab", { name: /Jobs and runs/ }).click()
+    await expect(page.getByRole("heading", { name: "Background jobs" })).toBeVisible()
+    await expect(page.getByText("Backup script", { exact: true }).first()).toBeVisible()
   })
 })
 
@@ -420,13 +424,13 @@ test("release candidate: grouping explanation, silent merchants, merchant view, 
   const { id } = await startSoundbox(operator)
 
   const grouping = operator.getByRole("region", { name: "Why these were grouped" })
-  await expect(grouping.getByTestId("grouping-signals")).toContainText("SBX-AI-2")
+  await expect(grouping.getByTestId("grouping-signals")).toContainText(/sbx-ai-2/i)
   await expect(grouping.getByTestId("grouping-signals")).toContainText("7.4.1")
   await expect(grouping.getByTestId("grouping-counts")).toHaveText(/24 records · 21 merchants · 24 devices/)
   await expect(grouping.getByTestId("grouping-excluded")).toHaveText("6 unrelated record(s)")
   await expect(grouping.getByTestId("outreach")).toContainText("9merchants complained")
   await expect(grouping.getByTestId("outreach")).toContainText("12affected but silent")
-  await expect(operator.getByTestId("ai-engine")).toHaveText(/Scripted fallback/)
+  await expect(operator.getByTestId("ai-engine")).toHaveText("Backup script (fixed steps)")
 
   // Merchant 360 from a silent merchant.
   await grouping.getByText("Silent merchants", { exact: true }).click()
