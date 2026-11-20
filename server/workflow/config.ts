@@ -35,18 +35,21 @@ function intEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): number 
   return Number.isFinite(n) && n > 0 ? n : fallback
 }
 
+export const DEFAULT_SARVAM_MODEL = "sarvam-105b"
+
 /** Server-side configuration. Provider secrets are read here and never leave the server. */
 export function optionsFromEnv(env: NodeJS.ProcessEnv = process.env): WorkflowOptions {
   const mode = env.INVESTIGATOR_MODE === "sarvam" ? "sarvam" : "scripted"
   let provider: ModelProvider | null = null
   let reason: string | null = null
   if (mode === "sarvam") {
-    if (!env.SARVAM_API_KEY || !env.SARVAM_MODEL) {
-      reason = "INVESTIGATOR_MODE=sarvam but SARVAM_API_KEY or SARVAM_MODEL is not configured on the server"
+    if (!env.SARVAM_API_KEY) {
+      reason = "INVESTIGATOR_MODE=sarvam but SARVAM_API_KEY is not configured on the server"
     } else {
       provider = createSarvamProvider({
         apiKey: env.SARVAM_API_KEY,
-        model: env.SARVAM_MODEL,
+        // Current Sarvam chat model on /v2/chat/completions (sarvam-m is deprecated).
+        model: env.SARVAM_MODEL || DEFAULT_SARVAM_MODEL,
         baseUrl: env.SARVAM_BASE_URL,
         reasoningEffort: env.SARVAM_REASONING_EFFORT,
       })

@@ -31,6 +31,8 @@ export interface ReadRequest {
 }
 export interface SimulationInput {
   actionId: string; kind: ActionKind; targetIds: string[];
+  /** LINK_SUPPORT_TICKETS only (optional, additive): explicit primary per duplicate group. */
+  links?: { primaryId: string; duplicateIds: string[] }[];
 }
 export interface AppliedTarget {
   targetId: string; ok: boolean; appliedAt: string; priorSequence: number; reason: string | null;

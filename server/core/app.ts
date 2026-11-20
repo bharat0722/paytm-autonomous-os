@@ -12,7 +12,10 @@ import { openDb, type CoreDb } from "./db.js"
 import { activeGeneration, ensureBootstrapped, resetDemo } from "./generations.js"
 import { injectScenario } from "./inject.js"
 import { JobRunner } from "./jobs.js"
-import { dashboardView, incidentView } from "./readmodels.js"
+import { auditView, dashboardView, incidentView } from "./readmodels.js"
+import { metricsView } from "./metrics.js"
+import { detectionJobsView } from "./profile.js"
+import { jobById } from "./datasets.js"
 import { createCoreRuntime } from "./runtime.js"
 import { SessionStore, safeEqual, type SessionRecord } from "./session.js"
 import { emitTelemetry } from "./simulation.js"
@@ -134,6 +137,28 @@ export function createApp(options: AppOptions): CoreApp {
 
   api.get("/dashboard", (req, res) => {
     send(res, db.read((q) => dashboardView(q, workflow, res.locals.generation as number)))
+  })
+
+  // Scheduled detection jobs (cron catalogue) and on-demand runs.
+  api.get("/detection/jobs", (req, res) => {
+    send(res, db.read((q) => detectionJobsView(q, res.locals.generation as number, clock.now())))
+  })
+
+  api.post("/detection/jobs/:id/run", requireRole("operator"), (req, res) => {
+    const job = jobById(String(req.params.id))
+    if (!job) return fail(res, 404, "NOT_FOUND", "Unknown detection job.")
+    const { variant } = DemoInjectSchema.parse(req.body && Object.keys(req.body).length ? req.body : { variant: "success" })
+    send(res, injectScenario(db, clock, res.locals.generation as number, job.scenario, variant, job.id))
+  })
+
+  api.get("/metrics", (req, res) => {
+    send(res, db.read((q) => metricsView(q, workflow, res.locals.generation as number)))
+  })
+
+  api.get("/incidents/:id/audit", (req, res) => {
+    const view = db.read((q) => auditView(q, workflow, { generation: res.locals.generation as number, incidentId: String(req.params.id) }))
+    if (!view) return fail(res, 404, "NOT_FOUND", "Incident not found in the active generation.")
+    send(res, view)
   })
 
   api.get("/incidents/:id", (req, res) => {

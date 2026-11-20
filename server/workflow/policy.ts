@@ -19,8 +19,18 @@ export const RULES = {
 export type ActionRequest =
   | { kind: "MOCK_SYNC_DEVICE_CONFIG"; targetIds: string[] }
   | { kind: "MOCK_RESTART_DEVICE"; targetIds: string[] }
-  | { kind: "LINK_SUPPORT_TICKETS"; primaryTicketId: string; duplicateTicketIds: string[] }
+  | { kind: "LINK_SUPPORT_TICKETS"; primaryTicketId?: string; duplicateTicketIds?: string[]; groups?: LinkGroup[] }
   | { kind: string; targetIds?: string[] }
+
+/** One merchant's duplicate set: the primary stays open, duplicates link to it. */
+export interface LinkGroup { primaryTicketId: string; duplicateTicketIds: string[] }
+
+/** Normalizes the legacy single-group form and the multi-group form. */
+export function linkGroupsOf(r: { primaryTicketId?: string; duplicateTicketIds?: string[]; groups?: LinkGroup[] }): LinkGroup[] {
+  const raw = r.groups?.length ? r.groups : r.primaryTicketId ? [{ primaryTicketId: r.primaryTicketId, duplicateTicketIds: r.duplicateTicketIds ?? [] }] : []
+  return raw.map((g) => ({ primaryTicketId: g.primaryTicketId, duplicateTicketIds: sortedUnique(g.duplicateTicketIds ?? []) }))
+    .sort((a, b) => a.primaryTicketId.localeCompare(b.primaryTicketId))
+}
 
 export interface PolicyContext {
   incident: CoreIncident
@@ -37,8 +47,10 @@ export interface PolicyDecision {
   requiresApproval: boolean
   ruleId: string
   reason: string
-  /** Normalized, sorted targets the decision applies to (LINK: primary first). */
+  /** Normalized, sorted targets the decision applies to (LINK: each group's primary first). */
   targetIds: string[]
+  /** LINK only: the validated duplicate groups. */
+  groups?: LinkGroup[]
 }
 
 const FINANCIAL = /SETTLEMENT|REFUND|PAYOUT|PAYMENT|LEDGER|ADJUST|TRANSFER|REVERSAL/i
@@ -100,24 +112,33 @@ export function evaluateAction(ctx: PolicyContext, request: ActionRequest): Poli
       return { allowed: true, requiresApproval: true, ruleId: RULES.RESTART, reason: "Restart of unresolved verified devices requires human approval.", targetIds: targets }
     }
     case "LINK_SUPPORT_TICKETS": {
-      const r = request as { primaryTicketId: string; duplicateTicketIds: string[] }
-      const dups = sortedUnique(r.duplicateTicketIds ?? [])
-      const targets = [r.primaryTicketId, ...dups]
+      const groups = linkGroupsOf(request as { primaryTicketId?: string; duplicateTicketIds?: string[]; groups?: LinkGroup[] })
+      const targets = groups.flatMap((g) => [g.primaryTicketId, ...g.duplicateTicketIds])
       if (scenario !== "duplicate-tickets") return deny(RULES.DENY, "Ticket linking applies only to the duplicate-ticket incident.", targets)
       if (status !== "INVESTIGATING") return deny(RULES.DENY, `Ticket linking is not eligible while the incident is ${status}.`, targets)
-      if (!r.primaryTicketId || dups.length === 0) return deny(RULES.LINK, "A primary ticket and at least one duplicate are required.", targets)
-      if (dups.includes(r.primaryTicketId)) return deny(RULES.LINK, "The primary ticket cannot be linked to itself.", targets)
-      const primary = ctx.retrieved.get(r.primaryTicketId)
-      if (!primary || primary.kind !== "ticket") return deny(RULES.LINK, "The primary ticket was not read in this run.", targets)
-      for (const id of dups) {
-        const ev = ctx.retrieved.get(id)
-        if (!ev || ev.kind !== "ticket") return deny(RULES.LINK, `Ticket ${id} was not read in this run.`, targets)
-        const linked = ticketLinkTarget(ev)
-        if (linked && linked !== r.primaryTicketId) return deny(RULES.LINK, `Ticket ${id} is already linked to ${linked}.`, targets)
-        const m1 = primary.details.merchantId, m2 = ev.details.merchantId
-        if (m1 != null && m2 != null && m1 !== m2) return deny(RULES.LINK, `Ticket ${id} belongs to a different merchant.`, targets)
+      if (groups.length === 0) return deny(RULES.LINK, "A primary ticket and at least one duplicate are required.", targets)
+      if (new Set(targets).size !== targets.length) return deny(RULES.LINK, "A ticket may appear in only one duplicate group.", targets)
+      for (const g of groups) {
+        if (!g.primaryTicketId || g.duplicateTicketIds.length === 0) return deny(RULES.LINK, "Each group needs a primary ticket and at least one duplicate.", targets)
+        if (g.duplicateTicketIds.includes(g.primaryTicketId)) return deny(RULES.LINK, "The primary ticket cannot be linked to itself.", targets)
+        const primary = ctx.retrieved.get(g.primaryTicketId)
+        if (!primary || primary.kind !== "ticket") return deny(RULES.LINK, `Primary ticket ${g.primaryTicketId} was not read in this run.`, targets)
+        const primaryLink = ticketLinkTarget(primary)
+        if (primaryLink) return deny(RULES.LINK, `Primary ticket ${g.primaryTicketId} is itself linked to ${primaryLink}.`, targets)
+        for (const id of g.duplicateTicketIds) {
+          const ev = ctx.retrieved.get(id)
+          if (!ev || ev.kind !== "ticket") return deny(RULES.LINK, `Ticket ${id} was not read in this run.`, targets)
+          const linked = ticketLinkTarget(ev)
+          if (linked && linked !== g.primaryTicketId) return deny(RULES.LINK, `Ticket ${id} is already linked to ${linked}.`, targets)
+          const m1 = primary.details.merchantId, m2 = ev.details.merchantId
+          if (m1 != null && m2 != null && m1 !== m2) return deny(RULES.LINK, `Ticket ${id} belongs to a different merchant.`, targets)
+        }
       }
-      return { allowed: true, requiresApproval: false, ruleId: RULES.LINK, reason: "Eligible duplicate tickets for the same merchant issue.", targetIds: targets }
+      const dupCount = groups.reduce((n, g) => n + g.duplicateTicketIds.length, 0)
+      return {
+        allowed: true, requiresApproval: false, ruleId: RULES.LINK, targetIds: targets, groups,
+        reason: `Eligible duplicate tickets: ${dupCount} duplicates across ${groups.length} merchant ${groups.length === 1 ? "issue" : "issues"}.`,
+      }
     }
     default:
       return deny(RULES.DENY, `Action ${String(request.kind).slice(0, 60)} is not on the allowlist.`)

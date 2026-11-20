@@ -1,6 +1,6 @@
 import request from "supertest"
 import { afterEach, describe, expect, it } from "vitest"
-import { DashboardViewSchema, IncidentViewSchema, InjectResultSchema, SessionViewSchema } from "../../shared/contracts/http.js"
+import { AuditViewSchema, DashboardViewSchema, IncidentViewSchema, InjectResultSchema, MetricsViewSchema, SessionViewSchema } from "../../shared/contracts/http.js"
 import { makeCore, tempDbPath, TEST_CODES } from "./helpers.js"
 
 const cleanups: (() => void)[] = []
@@ -67,7 +67,26 @@ describe("HTTP boundary", () => {
     expect(dash.incidents[0]).toMatchObject({ id: incidentId, status: "DETECTED", affectedDeviceCount: 24 })
     const view = IncidentViewSchema.parse((await request(app).get(`/api/v1/incidents/${incidentId}`).set("Cookie", ap.cookie)).body.data)
     expect(view.evidence.filter((e) => e.kind === "device")).toHaveLength(24)
-    expect(view.workflow).toEqual({ finding: null, trace: [], audit: [], actions: [], approvals: [], recovery: null })
+    expect(view.workflow).toMatchObject({ finding: null, actions: [], approvals: [], recovery: null })
+    // FR-08: the persisted detection opens the chronology and the audit trail.
+    expect(view.workflow.trace).toHaveLength(1)
+    expect(view.workflow.trace[0]).toMatchObject({ stage: "detection", mode: "system", tool: "correlate_events" })
+    expect(view.workflow.audit[0]).toMatchObject({ event: "INCIDENT_DETECTED", actor: "system:correlator" })
+    expect(view.workflow.audit[0]!.evidenceIds).toHaveLength(24)
+    // FR-03: grouping explanation and complained vs. silent merchants.
+    expect(view.grouping).toMatchObject({ counts: { records: 24, merchants: 21, devices: 24 }, minMerchants: 3, windowMinutes: 5 })
+    expect(view.grouping!.signals.map((s) => s.value)).toEqual(["SBX-AI-2", "7.4.1", "NOTIFY_PUSH_DROPPED"])
+    expect(view.grouping!.excluded.reduce((n, e) => n + e.count, 0)).toBe(6)
+    expect(view.grouping!.outreach).toMatchObject({ complainedMerchants: 9, silentMerchants: 12 })
+    expect(view.grouping!.note).toMatch(/not a proven root cause/)
+    // PRD endpoints: durable audit and simulated metrics.
+    const audit = AuditViewSchema.parse((await request(app).get(`/api/v1/incidents/${incidentId}/audit`).set("Cookie", ap.cookie)).body.data)
+    expect(audit.audit[0]!.event).toBe("INCIDENT_DETECTED")
+    expect((await request(app).get("/api/v1/incidents/inc_nope/audit").set("Cookie", ap.cookie)).status).toBe(404)
+    const metrics = MetricsViewSchema.parse((await request(app).get("/api/v1/metrics").set("Cookie", ap.cookie)).body.data)
+    expect(metrics.simulated).toBe(true)
+    expect(metrics.metrics.find((m) => m.key === "grouping_quality")).toMatchObject({ numerator: 24, denominator: 24, value: "100%" })
+    expect((await request(app).get("/api/v1/metrics")).status).toBe(401)
     expect((await request(app).get("/api/v1/incidents/inc_nope").set("Cookie", ap.cookie)).status).toBe(404)
     const approvals = await request(app).get("/api/v1/approvals").set("Cookie", ap.cookie)
     expect(approvals.status).toBe(503)

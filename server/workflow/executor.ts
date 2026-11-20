@@ -8,6 +8,15 @@ import type { WorkflowOptions } from "./config.js"
 import { FIELD_OWNER, SUPPORT_OWNER, transition } from "./machine.js"
 import { addAudit, addEscalation, deviceChecks, getAction, latestVerification, saveState, type ActionRow } from "./store.js"
 import { FencedError, addMs, guardJob, parseJson, scopeOf, sortedUnique } from "./util.js"
+import { linkGroupsOf, type LinkGroup } from "./policy.js"
+
+/** Duplicate groups stored on a LINK action (multi-group args, or the legacy primary-first targets). */
+export function linkGroupsOfAction(action: Pick<ActionRow, "args" | "target_ids">): LinkGroup[] {
+  const args = parseJson<{ groups?: LinkGroup[]; primaryTicketId?: string }>(action.args, {})
+  if (args.groups?.length) return linkGroupsOf({ groups: args.groups })
+  const [primary, ...dups] = parseJson<string[]>(action.target_ids, [])
+  return primary ? linkGroupsOf({ primaryTicketId: primary, duplicateTicketIds: dups }) : []
+}
 
 const LABEL: Record<string, string> = {
   MOCK_SYNC_DEVICE_CONFIG: "Mock config sync",
@@ -121,7 +130,11 @@ function executeTx(core: CoreRuntime, options: WorkflowOptions, tx: Sql, job: Jo
   }
 
   tx.run("UPDATE wf_actions SET status = 'RUNNING' WHERE id = ?", [action.id])
-  const results = core.simulation.apply(tx, scope, { actionId: action.id, kind: action.kind, targetIds: targets })
+  const linkGroups = action.kind === "LINK_SUPPORT_TICKETS" ? linkGroupsOfAction(action) : []
+  const results = core.simulation.apply(tx, scope, {
+    actionId: action.id, kind: action.kind, targetIds: targets,
+    ...(linkGroups.length ? { links: linkGroups.map((g) => ({ primaryId: g.primaryTicketId, duplicateIds: g.duplicateTicketIds })) } : {}),
+  })
   for (const r of results) {
     tx.run(
       `INSERT OR IGNORE INTO wf_action_targets (action_id, target_id, generation, incident_id, ok, applied_at, prior_sequence, reason)
@@ -134,7 +147,7 @@ function executeTx(core: CoreRuntime, options: WorkflowOptions, tx: Sql, job: Jo
   tx.run("UPDATE wf_actions SET status = ?, executed_at = ? WHERE id = ?", [status, now, action.id])
   const auditId = addAudit(tx, scope, `execute:${action.id}:applied`, {
     at: now, actor: "workflow:executor", event: "ACTION_EXECUTED",
-    summary: `${label} applied by the simulator to ${okCount}/${results.length} targets (write only; recovery not yet verified).`,
+    summary: `${label} applied to ${okCount}/${results.length} targets (write only; recovery not yet verified).`,
     actionId: action.id, approvalId, evidenceIds: [],
   })
   tx.run("UPDATE wf_actions SET audit_id = COALESCE(audit_id, ?) WHERE id = ?", [auditId, action.id])

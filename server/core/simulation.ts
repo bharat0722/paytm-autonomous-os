@@ -44,11 +44,15 @@ export function applySimulation(tx: Sql, clock: Clock, scope: Scope, input: Simu
       let reason: string | null = null
       if (!inRoster) reason = "not in incident cohort"
       else if (input.kind === "MOCK_SYNC_DEVICE_CONFIG") {
-        const d = tx.get<{ config_version: string }>("SELECT config_version FROM devices WHERE id = ?", [targetId])!
-        if (d.config_version === AFFECTED_CONFIG) {
-          tx.run("UPDATE devices SET config_version = ?, revision = revision + 1 WHERE id = ?", [FIXED_CONFIG, targetId])
+        const d = tx.get<{ config_version: string; affected: string | null; target: string | null }>(
+          `SELECT d.config_version, b.affected_config AS affected, b.target_config AS target
+           FROM devices d LEFT JOIN sim_device_behavior b ON b.device_id = d.id WHERE d.id = ?`, [targetId])!
+        const affected = d.affected ?? AFFECTED_CONFIG
+        const target = d.target ?? FIXED_CONFIG
+        if (d.config_version === affected) {
+          tx.run("UPDATE devices SET config_version = ?, revision = revision + 1 WHERE id = ?", [target, targetId])
           ok = true
-        } else if (d.config_version === FIXED_CONFIG) {
+        } else if (d.config_version === target) {
           ok = true; reason = "already at target config"
         } else reason = `config ${d.config_version} is not eligible for sync`
       } else {
@@ -67,15 +71,23 @@ export function applySimulation(tx: Sql, clock: Clock, scope: Scope, input: Simu
   if (input.kind === "LINK_SUPPORT_TICKETS") {
     const linked = new Set(tx.all<{ record_id: string }>("SELECT record_id FROM incident_evidence WHERE incident_id = ? AND kind = 'ticket'", [scope.incidentId]).map((r) => r.record_id))
     const appliedAt = advanceTelemetry(tx, scope.generation, 1_000)
+    // Explicit groups (from the authorized action) win; otherwise primary = earliest ticket per merchant.
+    const explicitPrimary = new Map<string, string>()
+    for (const g of input.links ?? []) {
+      explicitPrimary.set(g.primaryId, g.primaryId)
+      for (const d of g.duplicateIds) explicitPrimary.set(d, g.primaryId)
+    }
     targets.forEach((targetId, i) => {
       let ok = false
       let reason: string | null = null
       const t = linked.has(targetId)
         ? tx.get<{ id: string; merchant_id: string; linked_to: string | null }>("SELECT id, merchant_id, linked_to FROM tickets WHERE id = ?", [targetId]) : undefined
+      const explicit = explicitPrimary.get(targetId)
+      const explicitRow = explicit ? tx.get<{ id: string; merchant_id: string }>("SELECT id, merchant_id FROM tickets WHERE id = ?", [explicit]) : undefined
       if (!t) reason = "ticket not linked to this incident"
+      else if (explicit && (!linked.has(explicit) || explicitRow?.merchant_id !== t.merchant_id)) reason = "primary ticket is not an eligible ticket of the same merchant"
       else {
-        // Primary = earliest ticket of the same merchant within the incident.
-        const primary = tx.get<{ id: string }>(
+        const primary = explicit ? { id: explicit } : tx.get<{ id: string }>(
           `SELECT t.id FROM tickets t JOIN incident_evidence e ON e.record_id = t.id AND e.incident_id = ? AND e.kind = 'ticket'
            WHERE t.merchant_id = ? ORDER BY t.created_at, t.id LIMIT 1`, [scope.incidentId, t.merchant_id])!
         if (primary.id === t.id) { ok = true; reason = "primary ticket (kept open)" }
@@ -114,11 +126,11 @@ export function emitTelemetry(tx: Sql, job: Job): number {
   advanceTelemetry(tx, job.generation, 3_000)
   for (const t of targets) {
     if (t.ok !== 1) continue
-    const d = tx.get<{ config_version: string; restarted_at: string | null; needs_restart: number; restart_fails: number }>(
-      `SELECT d.config_version, d.restarted_at, b.needs_restart, b.restart_fails FROM devices d
+    const d = tx.get<{ config_version: string; restarted_at: string | null; needs_restart: number; restart_fails: number; target: string | null }>(
+      `SELECT d.config_version, d.restarted_at, b.needs_restart, b.restart_fails, b.target_config AS target FROM devices d
        JOIN sim_device_behavior b ON b.device_id = d.id WHERE d.id = ?`, [t.target_id])
     if (!d) continue
-    const configOk = d.config_version === FIXED_CONFIG
+    const configOk = d.config_version === (d.target ?? FIXED_CONFIG)
     const notifyOk = configOk && (d.needs_restart === 0 || (d.restarted_at !== null && d.restart_fails === 0))
     for (const [kind, passed] of [["heartbeat", true], ["config", configOk], ["notification_probe", notifyOk]] as const) {
       const occurredAt = advanceTelemetry(tx, job.generation, 250)

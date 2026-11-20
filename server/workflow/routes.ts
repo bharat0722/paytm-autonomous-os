@@ -5,7 +5,8 @@
 import type { NextFunction, Request, RequestHandler, Response, Router } from "express"
 import { z } from "zod"
 import type { CoreRuntime } from "../../shared/contracts/core.js"
-import { ApprovalDecisionSchema, type Actor, type ApprovalQueue, type Role, type StartResult } from "../../shared/contracts/http.js"
+import { ActionRequestBodySchema, ApprovalDecisionSchema, type Actor, type ApprovalQueue, type Role, type StartResult } from "../../shared/contracts/http.js"
+import { requestAction, requestVerify } from "./requests.js"
 import { approvalView, decideApproval, listApprovals } from "./approvals.js"
 import { requireIncident } from "./machine.js"
 import { addAudit, getState } from "./store.js"
@@ -85,6 +86,22 @@ export function registerWorkflowRoutes(core: CoreRuntime, router: Router, requir
     if (!parsed.success) throw new WorkflowError(400, "INVALID_INPUT", "This request takes an empty body.")
     const result = requestInvestigation(core, actorOf(res), generationOf(res), String(req.params.id))
     res.status(202).json({ data: result })
+  }))
+
+  // PRD §13: request an action; policy decides the path. Never executes directly.
+  router.post("/incidents/:id/actions", requireRole("operator"), wrap((req, res) => {
+    const body = ActionRequestBodySchema.safeParse(req.body)
+    if (!body.success) throw new WorkflowError(400, "INVALID_INPUT", "Body must contain kind and optional targetIds.")
+    const result = requestAction(core, actorOf(res), generationOf(res), String(req.params.id), body.data)
+    res.status(result.path === "APPROVAL_PENDING" ? 202 : 200).json({ data: result })
+  }))
+
+  // PRD §13: queue a fresh verifier-owned check when the incident is VERIFYING; otherwise return the latest result.
+  router.post("/incidents/:id/verify", requireRole("operator"), wrap((req, res) => {
+    const parsed = EmptyBody.safeParse(req.body && Object.keys(req.body).length === 0 ? undefined : req.body)
+    if (!parsed.success) throw new WorkflowError(400, "INVALID_INPUT", "This request takes an empty body.")
+    const result = requestVerify(core, actorOf(res), generationOf(res), String(req.params.id))
+    res.status(result.queued ? 202 : 200).json({ data: result })
   }))
 
   router.get("/approvals", wrap((_req, res) => {

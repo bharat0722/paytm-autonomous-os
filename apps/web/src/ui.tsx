@@ -68,7 +68,7 @@ export function EmptyState({ icon = "stack", title, children, action }: {
 export function InlineError({ problem, retry }: { problem: ApiProblem; retry?: () => void }) {
   const titles: Record<string, string> = {
     UNAUTHENTICATED: "Sign-in required", FORBIDDEN: "Action unavailable for this session",
-    STALE_GENERATION: "This demo was reset", APPROVAL_CONFLICT: "Approval changed",
+    STALE_GENERATION: "The sandbox was reset", APPROVAL_CONFLICT: "Approval changed",
     APPROVAL_EXPIRED: "Approval expired", WORKFLOW_UNAVAILABLE: "Workflow unavailable",
     INJECTION_CONFLICT: "This scenario already ran", NOT_FOUND: "Record unavailable",
     CSRF_INVALID: "Session changed", INVALID_INPUT: "Check your input", INVALID_RESPONSE: "Unexpected API data",

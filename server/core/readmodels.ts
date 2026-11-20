@@ -1,12 +1,21 @@
 // Read models built from persisted state (dashboard and incident detail).
-import { EMPTY_WORKFLOW, type DashboardView, type IncidentView, type Scope, type WorkflowView } from "../../shared/contracts/http.js"
+import { EMPTY_WORKFLOW, type AuditView, type DashboardView, type IncidentView, type Scope, type WorkflowView } from "../../shared/contracts/http.js"
 import type { Sql, WorkflowModule } from "../../shared/contracts/core.js"
 import { readAllEvidence } from "./evidence.js"
+import { detectionEntries, groupingView } from "./grouping.js"
+import { incidentProfile, incidentSignals } from "./profile.js"
 import { getIncident, linkedMerchantIds, listIncidentCards } from "./incidents.js"
 
+/** Workflow view with the persisted detection entry first in both trace and audit (FR-08). */
 export function workflowFor(q: Sql, workflow: WorkflowModule | null, scope: Scope): WorkflowView {
-  if (!workflow) return { ...EMPTY_WORKFLOW, trace: [], audit: [], actions: [], approvals: [] }
-  return workflow.getIncidentWorkflow(q, scope)
+  const wf = workflow ? workflow.getIncidentWorkflow(q, scope) : { ...EMPTY_WORKFLOW, trace: [], audit: [], actions: [], approvals: [] }
+  const detection = detectionEntries(q, scope)
+  if (!detection) return wf
+  return {
+    ...wf,
+    trace: [detection.trace, ...wf.trace.filter((t) => t.id !== detection.trace.id)],
+    audit: [detection.audit, ...wf.audit.filter((a) => a.id !== detection.audit.id)]
+  }
 }
 
 export function incidentView(q: Sql, workflow: WorkflowModule | null, scope: Scope): IncidentView | null {
@@ -14,8 +23,16 @@ export function incidentView(q: Sql, workflow: WorkflowModule | null, scope: Sco
   if (!inc) return null
   return {
     generation: scope.generation, incident: inc.card, evidence: readAllEvidence(q, scope),
-    blocker: inc.blocker, owner: inc.owner, workflow: workflowFor(q, workflow, scope)
+    blocker: inc.blocker, owner: inc.owner, workflow: workflowFor(q, workflow, scope),
+    grouping: groupingView(q, scope),
+    profile: incidentProfile(q, scope),
+    signals: incidentSignals(q, scope)
   }
+}
+
+export function auditView(q: Sql, workflow: WorkflowModule | null, scope: Scope): AuditView | null {
+  if (!getIncident(q, scope)) return null
+  return { generation: scope.generation, incidentId: scope.incidentId, audit: workflowFor(q, workflow, scope).audit }
 }
 
 /** Currently affected merchants: the latest verifier snapshot when present, else the frozen cohort. */

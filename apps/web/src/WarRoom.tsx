@@ -1,27 +1,90 @@
 import { useMemo, useState } from "react"
 import type {
-  ActionView, AuditEntry, DeviceCheck, EvidenceView, IncidentView, RecoveryView, TraceEntry,
+  ActionView, AuditEntry, DeviceCheck, EvidenceView, GroupingView, IncidentView, RecoveryView, TraceEntry,
 } from "../../../shared/contracts/http.js"
 import { CopyId, Dialog, EmptyState, Icon, IncidentBadge, SectionHeader, StatusBadge, Time } from "./ui.js"
-import { approvalsHref, incidentHref, incidentPresentation, label, modes, scenarios, traceSummary } from "./workspace.js"
+import { approvalPresentation, approvalsHref, incidentHref, incidentPresentation, label, modes, number, scenarios, traceSummary } from "./workspace.js"
 
 const actionTitle: Record<ActionView["kind"], string> = {
-  MOCK_SYNC_DEVICE_CONFIG: "Configuration sync", MOCK_RESTART_DEVICE: "Simulated restart", LINK_SUPPORT_TICKETS: "Link support tickets",
+  MOCK_SYNC_DEVICE_CONFIG: "Configuration sync", MOCK_RESTART_DEVICE: "Remote device restart", LINK_SUPPORT_TICKETS: "Link support tickets",
 }
 const actionState: Record<ActionView["status"], string> = {
   PROPOSED: "Proposed", RUNNING: "Running", SUCCEEDED: "Executed", PARTIAL: "Partially executed", FAILED: "Failed", BLOCKED: "Blocked",
 }
 const evidenceKinds: Record<EvidenceView["kind"], string> = {
-  device: "Devices", device_event: "Device events", ticket: "Support tickets", payment: "Payments", settlement: "Settlements", merchant: "Merchants",
+  device: "Device", device_event: "Device event", ticket: "Support ticket", payment: "Payment", settlement: "Settlement", merchant: "Merchant",
 }
 const deviceCheck: Record<DeviceCheck["status"], string> = { PASS: "Passed", FAIL: "Failed", AWAITING: "Awaiting signal" }
+const severityTone = { CRITICAL: "red", HIGH: "red", MEDIUM: "amber", LOW: "neutral" } as const
 
-function EvidenceLinks({ ids, open }: { ids: string[]; open: (id: string) => void }) {
+/** Fallback kind for IDs that are referenced but not returned in this view. */
+const prefixKinds: [string, string][] = [
+  ["obs_", "Device signal"], ["chk_", "Verification"], ["act_", "Action"], ["apr_", "Approval"], ["aud_", "Audit entry"], ["trc_", "Trace step"],
+]
+
+/** Anything an ID in this incident can point at, flattened for one detail sheet. */
+type Ref = {
+  id: string; kind: string; title: string; at: string | null
+  facts: [string, string][]; record?: EvidenceView
+}
+type Tab = "overview" | "evidence" | "investigation" | "actions" | "audit"
+
+function useReferences(data: IncidentView): Map<string, Ref> {
+  return useMemo(() => {
+    const refs = new Map<string, Ref>()
+    const put = (ref: Ref) => { if (!refs.has(ref.id)) refs.set(ref.id, ref) }
+    for (const r of data.evidence) put({
+      id: r.id, kind: evidenceKinds[r.kind], title: r.title, at: r.occurredAt, record: r,
+      facts: Object.entries(r.details).map(([k, v]) => [label(k), v == null ? "—" : String(v)]),
+    })
+    for (const s of data.signals) put({
+      id: s.id, kind: "Device signal", title: `${s.deviceId} · ${label(s.kind)} ${s.passed ? "passed" : "failed"}`, at: s.occurredAt,
+      facts: [["Device", s.deviceId], ["Signal", label(s.kind)], ["Result", s.passed ? "Passed" : "Failed"], ["Sequence", String(s.sequence)],
+        ...(s.actionId ? [["After action", s.actionId] as [string, string]] : [])],
+    })
+    for (const a of data.workflow.actions) put({
+      id: a.id, kind: "Action", title: actionTitle[a.kind], at: null,
+      facts: [["Status", actionState[a.status]], ["Policy rule", a.ruleId], ["Targets", String(a.targetIds.length)], ["Summary", a.summary]],
+    })
+    for (const p of data.workflow.approvals) put({
+      id: p.id, kind: "Approval", title: `Restart approval · ${approvalPresentation[p.status][0]}`, at: p.createdAt,
+      facts: [["Status", approvalPresentation[p.status][0]], ["Devices", p.targetDeviceIds.join(", ")], ["Rule", p.ruleId],
+        ["Decided by", p.decidedBy ?? "—"], ["Reason", p.reason ?? "—"], ["Expected check", p.expectedCheck]],
+    })
+    for (const e of data.workflow.audit) put({
+      id: e.id, kind: "Audit entry", title: label(e.event), at: e.at,
+      facts: [["Actor", e.actor], ["Summary", e.summary], ...(e.actionId ? [["Action", e.actionId] as [string, string]] : []),
+        ...(e.approvalId ? [["Approval", e.approvalId] as [string, string]] : [])],
+    })
+    for (const t of data.workflow.trace) put({
+      id: t.id, kind: "Trace step", title: label(t.stage), at: t.at,
+      facts: [["Engine", modes[t.mode][0]], ["Summary", traceSummary(t.summary)], ...(t.tool ? [["Tool", t.tool] as [string, string]] : [])],
+    })
+    const rec = data.workflow.recovery
+    if (rec) put({
+      id: rec.id, kind: "Verification", title: `${rec.recovered} of ${rec.total} verified`, at: rec.checkedAt,
+      facts: [["Recovered", `${rec.recovered} / ${rec.total}`], ["Previous check", `${rec.beforeRecovered} / ${rec.total}`],
+        ["Still failing", rec.remainingDeviceIds.join(", ") || "None"]],
+    })
+    return refs
+  }, [data])
+}
+
+function RefChips({ ids, refs, open }: { ids: string[]; refs: Map<string, Ref>; open: (id: string) => void }) {
+  const [all, setAll] = useState(false)
   if (!ids.length) return null
-  return <details className="evidence-links">
-    <summary><Icon name="link" size={14}/> {ids.length} evidence {ids.length === 1 ? "reference" : "references"}</summary>
-    <ul>{ids.map((id) => <li key={id}><button className="text-button record-link" onClick={() => open(id)}>{id}</button></li>)}</ul>
-  </details>
+  const shown = all ? ids : ids.slice(0, 6)
+  return <ul className="ref-chips" aria-label="Linked references">
+    {shown.map((id) => {
+      const ref = refs.get(id)
+      if (!ref) {
+        const kind = prefixKinds.find(([p]) => id.startsWith(p))?.[1] ?? "Reference"
+        return <li key={id}><span className="ref-chip ref-chip--muted" title="Recorded in the workflow; details are not part of this view">{kind} <code>{id}</code></span></li>
+      }
+      return <li key={id}><button className="ref-chip" title={ref.title} onClick={() => open(id)}><span>{ref.kind}</span> <code>{id}</code></button></li>
+    })}
+    {ids.length > 6 && <li><button className="ref-chip ref-chip--muted" aria-expanded={all} onClick={() => setAll(!all)}>{all ? "Show fewer" : `+${ids.length - 6} more`}</button></li>}
+  </ul>
 }
 
 function RecoveryProgress({ recovery, closed }: { recovery: RecoveryView; closed: boolean }) {
@@ -42,178 +105,283 @@ function RecoveryProgress({ recovery, closed }: { recovery: RecoveryView; closed
   </section>
 }
 
-function WorkLog({ entries, openEvidence }: { entries: TraceEntry[]; openEvidence: (id: string) => void }) {
-  const [all, setAll] = useState(false)
-  const shown = all ? entries : entries.slice(-5)
-  return <section className="card worklog"><SectionHeader title="AI work log" subtitle="Chronology from the stored investigation trace"
-    action={<span className="mini-icon"><Icon name="list" size={17}/></span>}/>
-    {!entries.length ? <EmptyState icon="list" title="No workflow activity yet">The work log appears as the investigation runs.</EmptyState> : <>
-      <ol className="work-steps">{shown.map((entry) => {
+function GroupingPanel({ grouping, openMerchant }: { grouping: GroupingView; openMerchant: (id: string) => void }) {
+  const excluded = grouping.excluded.reduce((n, e) => n + e.count, 0)
+  return <section className="card grouping" aria-label="Why these were grouped">
+    <SectionHeader title="Why these were grouped" subtitle="Rule-based correlation from stored records: a lead, not a proven cause"/>
+    <ul className="grouping-signals" data-testid="grouping-signals">{grouping.signals.map((s) => <li key={s.label}><span>{s.label}</span><code>{s.value}</code></li>)}</ul>
+    <dl className="fact-list grouping-facts">
+      <div><dt>Grouped</dt><dd data-testid="grouping-counts">{grouping.counts.records} records · {grouping.counts.merchants} merchants{grouping.counts.devices ? ` · ${grouping.counts.devices} devices` : ""}</dd></div>
+      <div><dt>Rule</dt><dd>{grouping.rule}</dd></div>
+      {grouping.window && <div><dt>Time window</dt><dd><Time value={grouping.window.start} clock/> – <Time value={grouping.window.end} clock/>{grouping.windowMinutes ? ` (limit ${grouping.windowMinutes} min)` : ""}</dd></div>}
+      <div><dt>Kept separate</dt><dd data-testid="grouping-excluded">{excluded ? `${excluded} unrelated record(s)` : "None"}</dd></div>
+    </dl>
+    {grouping.excluded.length > 0 && <details><summary>Why other records were not merged</summary>
+      <ul>{grouping.excluded.map((e, i) => <li key={i}><code>{e.key}</code>: {e.reason} ({e.count})</li>)}</ul></details>}
+    {grouping.outreach && <div className="outreach" data-testid="outreach">
+      <div><strong>{grouping.outreach.complainedMerchants}</strong><span>merchants complained</span></div>
+      <div className="outreach-silent"><strong>{grouping.outreach.silentMerchants}</strong><span>affected but silent</span></div>
+      <p>Silent merchants are affected but have not raised a ticket. They can be told proactively before they call support.</p>
+      {grouping.outreach.silentMerchantIds.length > 0 && <details><summary>Silent merchants</summary>
+        <ul className="code-list">{grouping.outreach.silentMerchantIds.map((id) => <li key={id}><button className="text-button record-link" onClick={() => openMerchant(id)}>{id}</button></li>)}</ul></details>}
+    </div>}
+    <p className="muted small-note">{grouping.note}</p>
+  </section>
+}
+
+/** Merchant 360 inside the detail sheet: everything in this incident linked to one merchant. */
+function MerchantRecords({ merchantId, records, open }: { merchantId: string; records: EvidenceView[]; open: (id: string) => void }) {
+  const devices = records.filter((r) => r.kind === "device" && r.details.merchantId === merchantId)
+  const deviceIds = new Set(devices.map((d) => d.id))
+  const related = records.filter((r) => r.id !== merchantId && (r.details.merchantId === merchantId || (r.kind === "device_event" && deviceIds.has(String(r.details.deviceId)))))
+  if (!related.length) return <p className="muted">No other records in this incident reference this merchant.</p>
+  return <div className="merchant-360" data-testid="merchant-360"><h3>Linked records for this merchant</h3>
+    <ul className="record-list">{related.map((r) => <li key={r.id}><button onClick={() => open(r.id)}>
+      <Icon name="file" size={16}/><span><strong>{r.title}</strong><small>{evidenceKinds[r.kind]}{r.occurredAt ? " · " : ""}{r.occurredAt && <Time value={r.occurredAt}/>}</small></span><Icon name="chevron" size={15}/>
+    </button></li>)}</ul></div>
+}
+
+function aiEngine(trace: TraceEntry[]): [string, "green" | "amber" | "neutral"] {
+  if (trace.some((t) => t.mode === "live_ai")) return ["Sarvam AI", "green"]
+  if (trace.some((t) => t.mode === "scripted_fallback")) return ["Scripted fallback (deterministic)", "amber"]
+  return ["System", "neutral"]
+}
+
+function EvidenceTab({ data, refs, open }: { data: IncidentView; refs: Map<string, Ref>; open: (id: string) => void }) {
+  const [kind, setKind] = useState("all")
+  const [query, setQuery] = useState("")
+  const [sort, setSort] = useState<"time" | "kind">("time")
+  const rows = useMemo(() => {
+    const all = [...data.evidence.map((r) => refs.get(r.id)!), ...data.signals.map((s) => refs.get(s.id)!)].filter(Boolean)
+    const term = query.trim().toLowerCase()
+    return all.filter((r) => (kind === "all" || r.kind === kind) && (!term || `${r.id} ${r.title}`.toLowerCase().includes(term)))
+      .sort((a, b) => sort === "kind" ? a.kind.localeCompare(b.kind) || (b.at ?? "").localeCompare(a.at ?? "") : (b.at ?? "").localeCompare(a.at ?? ""))
+  }, [data, refs, kind, query, sort])
+  const kinds = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const r of [...data.evidence.map((e) => evidenceKinds[e.kind]), ...data.signals.map(() => "Device signal")]) counts.set(r, (counts.get(r) ?? 0) + 1)
+    return [...counts].sort(([a], [b]) => a.localeCompare(b))
+  }, [data])
+  return <section className="card" aria-label="Evidence">
+    <SectionHeader title="Evidence" subtitle="Every stored record and device signal tied to this incident"
+      action={<span className="count-pill">{number.format(rows.length)} shown</span>}/>
+    <div className="list-controls">
+      <label className="search-field"><Icon name="search" size={16}/><input type="search" aria-label="Search evidence" placeholder="Search ID or title…" value={query} onChange={(e) => setQuery(e.target.value)}/></label>
+      <label className="sr-only" htmlFor="evidence-kind">Evidence type</label>
+      <select id="evidence-kind" value={kind} onChange={(e) => setKind(e.target.value)}>
+        <option value="all">All types</option>{kinds.map(([k, n]) => <option key={k} value={k}>{k} ({n})</option>)}
+      </select>
+      <label className="sr-only" htmlFor="evidence-sort">Sort</label>
+      <select id="evidence-sort" value={sort} onChange={(e) => setSort(e.target.value as "time" | "kind")}>
+        <option value="time">Newest first</option><option value="kind">By type</option>
+      </select>
+    </div>
+    {rows.length === 0 ? <EmptyState icon="search" title="No evidence matches">Change the search or type filter.</EmptyState> :
+      <div className="table-wrap"><table className="data-table">
+        <thead><tr><th scope="col">Type</th><th scope="col">Record</th><th scope="col">ID</th><th scope="col">Time</th></tr></thead>
+        <tbody>{rows.map((r) => <tr key={r.id} className="clickable" onClick={() => open(r.id)}>
+          <td><span className="type-cell">{r.kind}</span></td>
+          <td><button className="text-button" onClick={(e) => { e.stopPropagation(); open(r.id) }}>{r.title}</button></td>
+          <td><code>{r.id}</code></td>
+          <td>{r.at ? <Time value={r.at}/> : "—"}</td>
+        </tr>)}</tbody>
+      </table></div>}
+  </section>
+}
+
+function InvestigationTab({ entries, refs, open }: { entries: TraceEntry[]; refs: Map<string, Ref>; open: (id: string) => void }) {
+  return <section className="card worklog" aria-label="Investigation trace">
+    <SectionHeader title="How this incident was traced" subtitle="Every step from detection to verification, oldest first"/>
+    {!entries.length ? <EmptyState icon="list" title="No steps yet">Steps appear as the investigation runs.</EmptyState> :
+      <ol className="trace-steps">{entries.map((entry, index) => {
         const [mode, tone] = modes[entry.mode]
         return <li key={entry.id}>
-          <span className="step-indicator" aria-hidden="true"/>
-          <div><div className="step-meta"><StatusBadge text={mode} tone={tone}/><Time value={entry.at} clock/></div>
-            <strong>{label(entry.stage)}</strong><p>{traceSummary(entry.summary)}</p>
+          <span className="trace-index">{index + 1}</span>
+          <div className="trace-body">
+            <div className="step-meta"><strong>{label(entry.stage)}</strong><StatusBadge text={mode} tone={tone}/><span className="muted"><Time value={entry.at} clock/></span></div>
+            <p>{traceSummary(entry.summary)}</p>
             {entry.tool && <code className="tool-code">{entry.tool}</code>}
-            <EvidenceLinks ids={entry.evidenceIds} open={openEvidence}/>
+            <RefChips ids={entry.evidenceIds} refs={refs} open={open}/>
           </div>
         </li>
-      })}</ol>
-      {entries.length > 5 && <button className="button button--quiet" onClick={() => setAll(!all)} aria-expanded={all}>{all ? "Show recent activity" : "Show all activity"}</button>}
-    </>}
+      })}</ol>}
   </section>
 }
 
-function RecordBrowser({ records, open }: { records: EvidenceView[]; open: (id: string) => void }) {
-  const [selected, setSelected] = useState<EvidenceView["kind"]>()
-  const [expanded, setExpanded] = useState(false)
-  const groups = useMemo(() => {
-    const byKind = new Map<EvidenceView["kind"], EvidenceView[]>()
-    for (const entry of records) {
-      const group = byKind.get(entry.kind)
-      if (group) group.push(entry)
-      else byKind.set(entry.kind, [entry])
-    }
-    return byKind
-  }, [records])
-  const active = selected && groups.has(selected) ? selected : groups.keys().next().value
-  const group = active ? groups.get(active) ?? [] : []
-  return <section className="card">
-    <SectionHeader title="Linked records" subtitle="Records associated with this incident" action={<span className="mini-icon"><Icon name="stack" size={17}/></span>}/>
-    {records.length === 0 ? <EmptyState title="No linked records yet">Evidence appears when the workspace finds related records.</EmptyState> : <>
-      <div className="filter-chips" aria-label="Evidence type">
-        {[...groups].map(([kind, items]) => <button key={kind} onClick={() => { setSelected(kind); setExpanded(false) }}
-          aria-pressed={active === kind}>{evidenceKinds[kind]} <span>{items.length}</span></button>)}
-      </div>
-      <ul className="record-list">{(expanded ? group : group.slice(0, 4)).map((record) => <li key={record.id}>
-        <button onClick={() => open(record.id)}>
-          <Icon name="file" size={16}/><span><strong>{record.title}</strong><small>{record.id}</small></span><Icon name="chevron" size={15}/>
-        </button>
-      </li>)}</ul>
-      {group.length > 4 && <button className="button button--quiet" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}>
-        {expanded ? "Show fewer records" : `Show all ${group.length} records`}
-      </button>}
-    </>}
-  </section>
+function ActionsTab({ data, refs, open, closed }: { data: IncidentView; refs: Map<string, Ref>; open: (id: string) => void; closed: boolean }) {
+  const [checks, setChecks] = useState(false)
+  const { actions, approvals, recovery } = data.workflow
+  return <div className="section-stack">
+    <section className="card" aria-label="Actions">
+      <SectionHeader title="Actions" subtitle="Every action proposed or executed, with the policy rule that allowed it"/>
+      {actions.length === 0 ? <p className="muted">No actions recorded.</p> : <div className="table-wrap"><table className="data-table">
+        <thead><tr><th scope="col">Action</th><th scope="col">Status</th><th scope="col" className="num">Targets</th><th scope="col">Policy rule</th><th scope="col">Summary</th></tr></thead>
+        <tbody>{actions.map((a) => <tr key={a.id}>
+          <td><button className="text-button" onClick={() => open(a.id)}><strong>{actionTitle[a.kind]}</strong></button></td>
+          <td><StatusBadge text={actionState[a.status]} tone={a.status === "FAILED" || a.status === "BLOCKED" ? "red" : a.status === "SUCCEEDED" ? "green" : "neutral"}/></td>
+          <td className="num">{a.targetIds.length}</td>
+          <td><code>{a.ruleId}</code></td>
+          <td>{a.summary}</td>
+        </tr>)}</tbody>
+      </table></div>}
+    </section>
+    <section className="card" aria-label="Approvals for this incident">
+      <SectionHeader title="Approvals" subtitle="Restricted actions need a human decision before they run"/>
+      {approvals.length === 0 ? <p className="muted">No approval was needed.</p> : <ul className="approval-cards">{approvals.map((p) => {
+        const [text, tone] = approvalPresentation[p.status]
+        return <li key={p.id}>
+          <div className="type-head"><strong>Remote device restart · {p.targetDeviceIds.length} devices</strong><StatusBadge text={text} tone={tone}/></div>
+          <dl className="type-facts">
+            <div><dt>Requested</dt><dd><Time value={p.createdAt}/></dd></div>
+            <div><dt>Decided by</dt><dd>{p.decidedBy ?? "—"}</dd></div>
+            <div><dt>Expected check</dt><dd>{p.expectedCheck}</dd></div>
+          </dl>
+          {p.reason && <p>Reason: {p.reason}</p>}
+          <RefChips ids={p.evidenceIds} refs={refs} open={open}/>
+          {p.status === "PENDING" && <a className="button button--secondary button--small" href={approvalsHref(p.id)}>Review approval <Icon name="forward" size={14}/></a>}
+        </li>
+      })}</ul>}
+    </section>
+    {recovery && data.incident.scenario === "soundbox" && <section className="card device-checks">
+      <SectionHeader title="Device checks" subtitle={`Per-device results from the latest verification${closed ? "" : " (in progress)"}`}
+        action={<button className="button button--quiet" aria-expanded={checks} onClick={() => setChecks(!checks)}>{checks ? "Hide device checks" : "View device checks"}</button>}/>
+      {checks && <div className="table-wrap"><table className="data-table"><thead><tr><th scope="col">Device ID</th><th scope="col">Result</th><th scope="col">Check detail</th></tr></thead>
+        <tbody>{recovery.devices.map((device) => <tr key={device.deviceId}>
+          <td><code>{device.deviceId}</code></td>
+          <td><StatusBadge text={deviceCheck[device.status]} tone={device.status === "PASS" ? "green" : device.status === "FAIL" ? "red" : "amber"}/></td>
+          <td>{device.reason}<RefChips ids={device.evidenceIds} refs={refs} open={open}/></td>
+        </tr>)}</tbody>
+      </table></div>}
+    </section>}
+  </div>
 }
 
-function AuditHistory({ entries, openEvidence, focusedId }: { entries: AuditEntry[]; openEvidence: (id: string) => void; focusedId?: string }) {
-  if (!entries.length) return <p className="muted">No audit entries yet.</p>
-  const shown = focusedId ? [...entries].sort((left, right) => Number(right.id === focusedId) - Number(left.id === focusedId)) : entries
-  return <ol className="audit-list">{shown.map((entry) => <li key={entry.id} className={entry.id === focusedId ? "audit-focus" : undefined}>
-    <div><strong>{label(entry.event)}</strong> <Time value={entry.at}/></div><p>{entry.summary}</p>
-    <dl className="fact-list">
-      <div><dt>Actor</dt><dd>{entry.actor}</dd></div>
-      {entry.actionId && <div><dt>Action</dt><dd><code>{entry.actionId}</code></dd></div>}
-      {entry.approvalId && <div><dt>Approval</dt><dd><code>{entry.approvalId}</code></dd></div>}
-    </dl><EvidenceLinks ids={entry.evidenceIds} open={openEvidence}/>
-  </li>)}</ol>
+function AuditTab({ entries, refs, open }: { entries: AuditEntry[]; refs: Map<string, Ref>; open: (id: string) => void }) {
+  return <section className="card" aria-label="Audit log">
+    <SectionHeader title="Audit log" subtitle="Durable record of who or what did each step"/>
+    {!entries.length ? <p className="muted">No audit entries yet.</p> : <div className="table-wrap"><table className="data-table audit-table">
+      <thead><tr><th scope="col">Time</th><th scope="col">Event</th><th scope="col">Actor</th><th scope="col">Detail</th></tr></thead>
+      <tbody>{entries.map((e) => <tr key={e.id}>
+        <td><Time value={e.at}/></td>
+        <td><strong>{label(e.event)}</strong></td>
+        <td><code>{e.actor}</code></td>
+        <td>{e.summary}<RefChips ids={[...(e.actionId ? [e.actionId] : []), ...(e.approvalId ? [e.approvalId] : []), ...e.evidenceIds]} refs={refs} open={open}/></td>
+      </tr>)}</tbody>
+    </table></div>}
+  </section>
 }
 
 export function WarRoom({ data, deepEvidence, canResume, resuming, resume }: {
   data: IncidentView; deepEvidence?: string; canResume: boolean; resuming: boolean; resume: () => void
 }) {
-  const { incident, evidence, blocker, owner, workflow } = data
-  const [evidenceId, setEvidence] = useState<string>()
-  const [auditId, setAudit] = useState<string | null>(null)
-  const [expandedChecks, setExpandedChecks] = useState(false)
-  const selectedEvidence = evidenceId ?? deepEvidence
-  const selectedRecord = useMemo(() => new Map(evidence.map((record) => [record.id, record])), [evidence]).get(selectedEvidence ?? "")
+  const { incident, blocker, owner, workflow, grouping, profile } = data
+  const refs = useReferences(data)
+  const [engineName, engineTone] = aiEngine(workflow.trace)
+  const [refId, setRef] = useState<string>()
+  const [tab, setTab] = useState<Tab>("overview")
+  const selectedId = refId ?? deepEvidence
+  const selected = selectedId ? refs.get(selectedId) : undefined
   const pending = workflow.approvals.find(({ status }) => status === "PENDING")
   const recovery = incident.scenario === "soundbox" ? workflow.recovery : null
   const ticketChecks = incident.scenario === "duplicate-tickets" ? workflow.recovery : null
   const inconsistent = incident.status === "RESOLVED" && (!recovery || recovery.total === 0 ||
     recovery.recovered !== recovery.total || recovery.remainingDeviceIds.length > 0 ||
     recovery.devices.length !== recovery.total || recovery.devices.some(({ status }) => status !== "PASS"))
+  const closed = incident.status === "RESOLVED" && !inconsistent
 
-  function closeEvidence() {
-    setEvidence(undefined)
+  function closeSheet() {
+    setRef(undefined)
     if (deepEvidence) location.replace(incidentHref(incident.id))
   }
 
-  function openFromAudit(id: string) {
-    setAudit(null)
-    setEvidence(id)
-  }
+  const tabs: [Tab, string, number | null][] = [
+    ["overview", "Overview", null],
+    ["evidence", "Evidence", data.evidence.length + data.signals.length],
+    ["investigation", "Investigation", workflow.trace.length],
+    ["actions", "Actions & approvals", workflow.actions.length + workflow.approvals.length],
+    ["audit", "Audit log", workflow.audit.length],
+  ]
 
   return <>
     <p className="sr-only" role="status">
       {inconsistent ? "Verification needs review" : incidentPresentation[incident.status][0]}
       {recovery && !inconsistent && `. ${recovery.recovered} of ${recovery.total} devices verified recovered.`}
     </p>
-    <div className="incident-summary">
-      <div><a className="back-link" href="#/"><Icon name="back" size={15}/> Mission Control</a>
-        <h1>{incident.title}</h1><p>{scenarios[incident.scenario]} · <code>{incident.id}</code></p></div>
-      <div className="incident-summary-meta">
-        <div className="chip-row">{inconsistent ? <StatusBadge text="Verification needs review" tone="red"/> : <span data-testid="incident-status"><IncidentBadge status={incident.status}/></span>}
-          <StatusBadge text={`${label(incident.severity)} severity`} tone={["HIGH", "CRITICAL"].includes(incident.severity) ? "amber" : "neutral"}/></div>
-        <p>{incident.affectedDeviceCount > 0 ? `${incident.affectedDeviceCount} devices across ` : ""}{incident.affectedMerchantCount} merchants · Updated <Time value={incident.updatedAt}/></p>
-        {canResume && <button className="button button--quiet" onClick={resume} disabled={resuming}>{resuming ? "Queuing…" : "Resume Investigation"}</button>}
+    <header className="incident-header">
+      <a className="back-link" href={incidentHref()}><Icon name="back" size={15}/> All incidents</a>
+      <div className="incident-title-row">
+        <div>
+          <p className="incident-id">{profile?.displayId ?? incident.displayId ?? incident.id} · {profile?.typeLabel ?? scenarios[incident.scenario]}</p>
+          <h1>{incident.title}</h1>
+        </div>
+        <div className="chip-row">
+          {inconsistent ? <StatusBadge text="Verification needs review" tone="red"/> : <span data-testid="incident-status"><IncidentBadge status={incident.status}/></span>}
+          <StatusBadge text={`${label(incident.severity)} severity`} tone={severityTone[incident.severity]}/>
+          {canResume && <button className="button button--quiet button--small" onClick={resume} disabled={resuming}>{resuming ? "Queuing…" : "Resume investigation"}</button>}
+        </div>
       </div>
+      {profile && <p className="incident-description">{profile.description}</p>}
+      <dl className="incident-facts">
+        {profile && <div><dt>Detected by</dt><dd>{profile.detectedBy.jobName}<small><code>{profile.detectedBy.cron}</code> · {profile.detectedBy.scheduleLabel}</small></dd></div>}
+        <div><dt>Detected at</dt><dd>{profile ? <Time value={profile.detectedBy.ranAt}/> : incident.detectedAt ? <Time value={incident.detectedAt}/> : "—"}</dd></div>
+        {profile && <div><dt>Threshold</dt><dd>{profile.threshold}</dd></div>}
+        <div><dt>Impact</dt><dd>{number.format(incident.affectedMerchantCount)} merchants{incident.affectedDeviceCount > 0 && <small>{number.format(incident.affectedDeviceCount)} devices</small>}</dd></div>
+        <div><dt>Zone</dt><dd>{profile?.zone ?? incident.zone ?? "—"}</dd></div>
+        <div><dt>Owner</dt><dd>{owner ?? incident.owner ?? "AI teammate"}<small>Updated <Time value={incident.updatedAt}/></small></dd></div>
+      </dl>
+    </header>
+
+    <div className="tabs" role="tablist" aria-label="Incident sections">
+      {tabs.map(([key, name, count]) => <button key={key} role="tab" id={`tab-${key}`} aria-selected={tab === key} aria-controls={`panel-${key}`}
+        className={tab === key ? "tab tab--active" : "tab"} onClick={() => setTab(key)}>{name}{count !== null && <span className="tab-count">{count}</span>}</button>)}
     </div>
 
-    {inconsistent && <div role="alert" className="callout callout--red"><Icon name="alert"/><div><strong>Recovery could not be confirmed</strong><p>The latest stored verification is incomplete.</p></div></div>}
-    {recovery ? <RecoveryProgress recovery={recovery} closed={incident.status === "RESOLVED" && !inconsistent}/> :
-      <section className="card outcome-placeholder"><Icon name={incident.scenario === "soundbox" ? "verify" : "stack"}/>
-        <div><h2>{incident.scenario === "soundbox" ? "Awaiting verification" : incident.scenario === "duplicate-tickets" ? "Ticket linkage" : "Read-only settlement handoff"}</h2>
-        <p>{ticketChecks ? <><strong data-testid="ticket-check-count">{ticketChecks.recovered} / {ticketChecks.total} ticket links verified</strong> · Checked <Time value={ticketChecks.checkedAt}/></> :
-          incident.scenario === "soundbox" ? "Recovery appears after the first completed device check." :
-            incident.scenario === "duplicate-tickets" ? "The workflow verifies links saved between support tickets." : "The workflow records the discrepancy and assigns it for human review."}</p></div>
-      </section>}
-    {pending && <div className="callout callout--amber"><Icon name="shield"/><div><strong>Human approval required</strong>
-      <p>{pending.targetDeviceIds.length} {pending.targetDeviceIds.length === 1 ? "device needs" : "devices need"} a simulated restart.</p></div>
-      <a className="button button--secondary" href={approvalsHref(pending.id)}>Review approval <Icon name="forward" size={15}/></a></div>}
-    {!pending && (blocker || owner) && <div className="callout"><Icon name="alert"/><div><strong>{owner ? `Assigned to ${owner}` : "Investigation note"}</strong>{blocker && <p>{blocker}</p>}</div></div>}
-
-    <div className="war-grid">
-      <div className="section-stack">
-        <section className="card findings">
-          <SectionHeader title="What the AI found" action={<span className="mini-icon"><Icon name="incident" size={17}/></span>}/>
-          {!workflow.finding ? <EmptyState icon="search" title="Findings are pending">The investigator publishes a summary when it has supporting records.</EmptyState> :
-            <div className="finding-content">
-              {workflow.finding.hypothesis && <div className="hypothesis"><h3>Working hypothesis</h3><p>{workflow.finding.hypothesis}</p></div>}
-              {!!workflow.finding.observations.length && <><h3>Observed facts</h3><ul>{workflow.finding.observations.map((entry, index) => <li key={index}>{entry}</li>)}</ul></>}
-              {workflow.finding.uncertainty && <div className="finding-note"><h3>Uncertainty</h3><p>{workflow.finding.uncertainty}</p></div>}
-              {!!workflow.finding.missingEvidence.length && <details><summary>Missing evidence</summary><ul>{workflow.finding.missingEvidence.map((line, index) => <li key={index}>{line}</li>)}</ul></details>}
-              <EvidenceLinks ids={workflow.finding.evidenceIds} open={setEvidence}/>
-            </div>}
-        </section>
-        <RecordBrowser records={evidence} open={setEvidence}/>
-      </div>
-      <div className="section-stack">
-        <WorkLog entries={workflow.trace} openEvidence={setEvidence}/>
-        <section className="card actions"><SectionHeader title="Actions and policy"
-          action={<span className="mini-icon"><Icon name="lock" size={17}/></span>}/>
-          {workflow.actions.length === 0 && <p className="muted">No actions recorded.</p>}
-          <ul>{workflow.actions.map((action) => <li key={action.id}><div className="action-title"><strong>{actionTitle[action.kind]}</strong>
-            <StatusBadge text={actionState[action.status]} tone={action.status === "FAILED" || action.status === "BLOCKED" ? "red" : "neutral"}/></div>
-            <p>{action.summary}</p><details><summary>{action.targetIds.length} targets · Policy details</summary>
-              <code>{action.ruleId}</code><ul className="code-list">{action.targetIds.map((id) => <li key={id}><code>{id}</code></li>)}</ul>
-            </details>{action.auditId && <button className="text-button" onClick={() => setAudit(action.auditId)}>View action audit</button>}
-          </li>)}</ul>
-          <button className="button button--quiet" onClick={() => setAudit("")}>Open audit history</button>
-        </section>
-      </div>
+    <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} className="tab-panel">
+      {tab === "overview" && <>
+        {inconsistent && <div role="alert" className="callout callout--red"><Icon name="alert"/><div><strong>Recovery could not be confirmed</strong><p>The latest stored verification is incomplete.</p></div></div>}
+        {pending && <div className="callout callout--amber"><Icon name="shield"/><div><strong>Human approval required</strong>
+          <p>{pending.targetDeviceIds.length} {pending.targetDeviceIds.length === 1 ? "device needs" : "devices need"} a remote restart before recovery can complete.</p></div>
+          <a className="button button--secondary" href={approvalsHref(pending.id)}>Review approval <Icon name="forward" size={15}/></a></div>}
+        {!pending && (blocker || owner) && <div className="callout"><Icon name="alert"/><div><strong>{owner ? `Assigned to ${owner}` : "Investigation note"}</strong>{blocker && <p>{blocker}</p>}</div></div>}
+        {recovery ? <RecoveryProgress recovery={recovery} closed={closed}/> :
+          <section className="card outcome-placeholder"><Icon name={incident.scenario === "soundbox" ? "verify" : "stack"}/>
+            <div><h2>{incident.scenario === "soundbox" ? "Awaiting verification" : incident.scenario === "duplicate-tickets" ? "Ticket linkage" : "Read-only settlement handoff"}</h2>
+            <p>{ticketChecks ? <><strong data-testid="ticket-check-count">{ticketChecks.recovered} / {ticketChecks.total} ticket links verified</strong> · Checked <Time value={ticketChecks.checkedAt}/></> :
+              incident.scenario === "soundbox" ? "Recovery appears after the first completed device check." :
+                incident.scenario === "duplicate-tickets" ? "Links saved between support tickets are verified after they are written." : "The discrepancy is recorded and assigned to a person for review. No money is moved."}</p></div>
+          </section>}
+        <div className="overview-grid">
+          <section className="card findings">
+            <SectionHeader title="What the AI found" subtitle="Findings from the investigator, with their supporting records"
+              action={<span data-testid="ai-engine"><StatusBadge text={engineName} tone={engineTone}/></span>}/>
+            {!workflow.finding ? <EmptyState icon="search" title="Findings are pending">The investigator publishes a summary when it has supporting records.</EmptyState> :
+              <div className="finding-content">
+                {workflow.finding.hypothesis && <div className="hypothesis"><h3>Working hypothesis</h3><p>{workflow.finding.hypothesis}</p></div>}
+                {!!workflow.finding.observations.length && <><h3>Observed facts</h3><ul>{workflow.finding.observations.map((entry, index) => <li key={index}>{entry}</li>)}</ul></>}
+                {workflow.finding.uncertainty && <div className="finding-note"><h3>Uncertainty</h3><p>{workflow.finding.uncertainty}</p></div>}
+                {!!workflow.finding.missingEvidence.length && <details><summary>Missing evidence</summary><ul>{workflow.finding.missingEvidence.map((line, index) => <li key={index}>{line}</li>)}</ul></details>}
+                <h3>Supporting records</h3>
+                <RefChips ids={workflow.finding.evidenceIds} refs={refs} open={setRef}/>
+              </div>}
+          </section>
+          {grouping && <GroupingPanel grouping={grouping} openMerchant={setRef}/>}
+        </div>
+      </>}
+      {tab === "evidence" && <EvidenceTab data={data} refs={refs} open={setRef}/>}
+      {tab === "investigation" && <InvestigationTab entries={workflow.trace} refs={refs} open={setRef}/>}
+      {tab === "actions" && <ActionsTab data={data} refs={refs} open={setRef} closed={closed}/>}
+      {tab === "audit" && <AuditTab entries={workflow.audit} refs={refs} open={setRef}/>}
     </div>
-    {recovery && <section className="card device-checks">
-      <SectionHeader title="Device checks" subtitle="Per-device results from the latest verification"
-        action={<button className="button button--quiet" aria-expanded={expandedChecks} onClick={() => setExpandedChecks(!expandedChecks)}>{expandedChecks ? "Hide device checks" : "View device checks"}</button>}/>
-      {expandedChecks && <div className="table-wrap"><table><thead><tr><th scope="col">Device ID</th><th scope="col">Result</th><th scope="col">Check detail</th></tr></thead>
-        <tbody>{recovery.devices.map((device) => <tr key={device.deviceId}>
-          <td><code>{device.deviceId}</code></td>
-          <td><StatusBadge text={deviceCheck[device.status]} tone={device.status === "PASS" ? "green" : device.status === "FAIL" ? "red" : "amber"}/></td>
-          <td>{device.reason}<EvidenceLinks ids={device.evidenceIds} open={setEvidence}/></td>
-        </tr>)}</tbody>
-      </table></div>}
-    </section>}
-    {selectedEvidence && <Dialog title="Evidence record" onDismiss={closeEvidence} sheet>
-      <CopyId value={selectedEvidence}/>
-      {selectedRecord ? <><h3 className="sheet-title">{selectedRecord.title}</h3><p className="muted">{evidenceKinds[selectedRecord.kind]}{selectedRecord.occurredAt && <> · <Time value={selectedRecord.occurredAt}/></>}</p>
-        <dl className="fact-list">{Object.entries(selectedRecord.details).map(([key, value]) => <div key={key}><dt>{label(key)}</dt><dd>{value == null ? "—" : String(value)}</dd></div>)}</dl></> :
-        <p className="muted">This ID is recorded in the workflow. No record details are available in the incident response.</p>}
-    </Dialog>}
-    {auditId !== null && <Dialog title="Audit history" onDismiss={() => setAudit(null)} sheet>
-      <AuditHistory entries={workflow.audit} openEvidence={openFromAudit} focusedId={auditId || undefined}/>
+
+    {selectedId && <Dialog title={selected ? selected.kind : "Reference"} onDismiss={closeSheet} sheet>
+      <CopyId value={selectedId}/>
+      {selected ? <><h3 className="sheet-title">{selected.title}</h3>{selected.at && <p className="muted"><Time value={selected.at}/></p>}
+        <dl className="fact-list">{selected.facts.map(([k, v]) => <div key={k}><dt>{k}</dt>
+          <dd>{refs.has(v) && v !== selected.id ? <button className="text-button record-link" onClick={() => setRef(v)}>{v}</button> : v}</dd></div>)}</dl>
+        {selected.record?.kind === "merchant" && <MerchantRecords merchantId={selected.id} records={data.evidence} open={setRef}/>}
+        {selected.record && selected.record.kind !== "merchant" && typeof selected.record.details.merchantId === "string" &&
+          <button className="button button--quiet" onClick={() => setRef(String(selected.record!.details.merchantId))}>Open merchant view</button>}</> :
+        <p className="muted">This ID is recorded in the workflow, but its details are not part of this incident view.</p>}
     </Dialog>}
   </>
 }

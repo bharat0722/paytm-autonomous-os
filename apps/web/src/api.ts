@@ -1,6 +1,6 @@
 import type { ZodType } from "zod"
 import {
-  ApiErrorSchema, ApprovalDecisionSchema, ApprovalQueueSchema, DashboardViewSchema, DecisionResultSchema,
+  ApiErrorSchema, ApprovalDecisionSchema, ApprovalQueueSchema, AuditViewSchema, DashboardViewSchema, DecisionResultSchema, DetectionJobsViewSchema, MetricsViewSchema,
   DemoInjectSchema, DemoSignInSchema, IncidentViewSchema, InjectResultSchema, SessionViewSchema,
   StartResultSchema, okEnvelope, type ApprovalDecision, type DemoInject, type DemoSignIn, type Scenario,
   type SessionView,
@@ -28,7 +28,7 @@ export function needsSessionRefresh(problem: ApiProblem): boolean {
 
 function assertGeneration<T extends { generation: number }>(value: T, expected: number): T {
   if (value.generation !== expected) {
-    throw new ApiProblem("STALE_GENERATION", "The demo was reset. Refreshing the current workspace.", 409)
+    throw new ApiProblem("STALE_GENERATION", "The sandbox was reset. Refreshing the current workspace.", 409)
   }
   return value
 }
@@ -84,6 +84,12 @@ export function createApi(fetcher: typeof fetch = fetch) {
     incident: (id: string, generation: number, signal: AbortSignal) =>
       scopedRead("/incidents/" + encodeURIComponent(id), IncidentViewSchema, generation, signal),
     approvals: (generation: number, signal: AbortSignal) => scopedRead("/approvals", ApprovalQueueSchema, generation, signal),
+    metrics: (generation: number, signal: AbortSignal) => scopedRead("/metrics", MetricsViewSchema, generation, signal),
+    jobs: (generation: number, signal: AbortSignal) => scopedRead("/detection/jobs", DetectionJobsViewSchema, generation, signal),
+    runJob: (session: SessionView, jobId: string, body: DemoInject) =>
+      command("/detection/jobs/" + encodeURIComponent(jobId) + "/run", InjectResultSchema, session, DemoInjectSchema.parse(body)),
+    audit: (id: string, generation: number, signal: AbortSignal) =>
+      scopedRead("/incidents/" + encodeURIComponent(id) + "/audit", AuditViewSchema, generation, signal),
     inject: (session: SessionView, scenario: Scenario, body: DemoInject) =>
       command("/demo/inject/" + scenario, InjectResultSchema, session, DemoInjectSchema.parse(body)),
     reset: (session: SessionView) => command("/demo/reset", SessionViewSchema.pick({ generation: true }), session, {}, true),

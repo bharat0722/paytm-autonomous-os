@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
 import type {
-  ApprovalDecision, DecisionResult, DemoInject, Role, Scenario, SessionView,
+  ApprovalDecision, DecisionResult, DetectionJobView, Role, SessionView,
 } from "../../../shared/contracts/http.js"
 import { api, ApiProblem, asProblem, needsSessionRefresh } from "./api.js"
-import { IncidentList, MissionControl, SimulationForm } from "./Mission.js"
+import { IncidentList, MissionControl } from "./Mission.js"
 import { WarRoom } from "./WarRoom.js"
 import { ApprovalCenter } from "./Approvals.js"
 import { Dialog, EmptyState, Icon, InlineError, Skeleton, type IconName } from "./ui.js"
@@ -30,11 +30,11 @@ function Login({ initialRole, onSignIn, button = "Sign in" }: {
   }
 
   return <form className="dialog-form login-form" onSubmit={(event) => void submit(event)}>
-    <span className="login-prompt">Use the demo access code for your role.</span>
+    <span className="login-prompt">Sign in with your team access code.</span>
     <label className="field">Role<select value={role} onChange={(event) => { setRole(event.target.value as Role); setError(undefined) }} disabled={busy}>
       <option value="operator">Operator</option><option value="approver">Approver</option>
     </select></label>
-    <label className="field">Access code<input type="password" name="demo-code" autoComplete="current-password" value={code}
+    <label className="field">Access code<input type="password" name="access-code" autoComplete="current-password" value={code}
       onChange={(event) => setCode(event.target.value)} required maxLength={200} disabled={busy}/></label>
     {error && <InlineError problem={error}/>}
     <button className="button button--primary" type="submit" disabled={busy}>{busy ? "Signing in…" : button}</button>
@@ -42,9 +42,9 @@ function Login({ initialRole, onSignIn, button = "Sign in" }: {
 }
 
 const nav: { view: "mission" | "incident" | "approvals"; name: string; icon: IconName }[] = [
-  { view: "mission", name: "Mission Control", icon: "grid" },
-  { view: "incident", name: "Incident War Room", icon: "incident" },
-  { view: "approvals", name: "Human Approval Center", icon: "shield" },
+  { view: "mission", name: "Overview", icon: "grid" },
+  { view: "incident", name: "Incidents", icon: "incident" },
+  { view: "approvals", name: "Approvals", icon: "shield" },
 ]
 
 function WorkspaceFrame({ view, session, lastIncident, onSwitch, onReset, children }: {
@@ -66,14 +66,14 @@ function WorkspaceFrame({ view, session, lastIncident, onSwitch, onReset, childr
       <nav aria-label="Workspace">{nav.map((item) => <a key={item.view} href={names[item.view]} aria-current={view === item.view ? "page" : undefined}>
         <Icon name={item.icon}/><span>{item.name}</span>
       </a>)}</nav>
-      <div className="sidebar-note"><Icon name="lock" size={15}/><span>Hackathon prototype<br/>Synthetic data only</span></div>
+      <div className="sidebar-note"><Icon name="lock" size={15}/><span>Merchant operations<br/>Device · Support · Settlement</span></div>
     </aside>
     <div className="surface">
       <header className="topbar">
         <div className="breadcrumb"><span>Workspace</span><Icon name="chevron" size={13}/><strong>{nav.find((item) => item.view === view)?.name}</strong></div>
         <div className="top-actions">
-          {view !== "mission" && role === "operator" && <button className="button button--quiet top-reset" onClick={onReset}><Icon name="reset" size={16}/>Reset demo</button>}
-          <span className="synthetic"><i aria-hidden="true"/>SYNTHETIC DEMO</span>
+          {view !== "mission" && role === "operator" && <button className="button button--quiet top-reset" onClick={onReset}><Icon name="reset" size={16}/>Reset sandbox</button>}
+          <span className="env-badge" title="Isolated sandbox environment"><i aria-hidden="true"/>Sandbox</span>
           <span className="role-label"><Icon name="user" size={16}/>{role ? label(role) : "Not signed in"}</span>
           {role && <button className="button button--quiet switch-role" onClick={onSwitch}>Switch role</button>}
         </div>
@@ -150,6 +150,19 @@ export function App() {
     (signal) => api.incident(incidentId!, session!.generation, signal),
     (data) => isActive(data.incident.status), reportReadError,
   )
+  const metrics = useResource(
+    sessionKey && route.view === "mission" ? sessionKey + "/metrics" : "",
+    (signal) => api.metrics(session!.generation, signal), () => false, reportReadError,
+  )
+  const metricsRefresh = metrics.refresh
+  const dashboardFingerprint = dashboard.data ? JSON.stringify([dashboard.data.kpis, dashboard.data.incidents.map((i) => i.status)]) : ""
+  useEffect(() => { if (dashboardFingerprint) metricsRefresh() }, [dashboardFingerprint, metricsRefresh])
+  const jobs = useResource(
+    sessionKey && route.view === "mission" ? sessionKey + "/jobs" : "",
+    (signal) => api.jobs(session!.generation, signal), () => false, reportReadError,
+  )
+  const jobsRefresh = jobs.refresh
+  useEffect(() => { if (dashboardFingerprint) jobsRefresh() }, [dashboardFingerprint, jobsRefresh])
   const approvals = useResource(
     sessionKey && route.view === "approvals" ? sessionKey + "/approvals" : "",
     (signal) => api.approvals(session!.generation, signal),
@@ -205,9 +218,10 @@ export function App() {
     }
   }
 
-  function inject(scenario: Scenario, variant: DemoInject["variant"]) {
-    void operate("inject", (scope) => api.inject(scope, scenario, { variant }), (result) => {
+  function runJob(job: DetectionJobView, drill: boolean) {
+    void operate("inject", (scope) => api.runJob(scope, job.id, { variant: drill ? "partial" : "success" }), (result) => {
       setLastIncident({ id: result.incidentId, generation: result.generation })
+      setNotice(`${job.name} ran and raised an incident.`)
       location.hash = incidentHref(result.incidentId)
     })
   }
@@ -254,9 +268,9 @@ export function App() {
       <section className="signin-intro">
         <span className="brand-icon"><Icon name="brand" size={25}/></span>
         <h1>Merchant Reliability OS</h1>
-        <p>Investigate merchant incidents, review simulated actions, and verify recovery from recorded evidence.</p>
+        <p>Detect, investigate and resolve merchant device, support and settlement incidents, with human approval for restricted actions and verified recovery.</p>
       </section>
-      <section className="card signin-card"><h2>Sign in to the demo</h2><Login initialRole="operator" onSignIn={signIn}/></section>
+      <section className="card signin-card"><h2>Sign in</h2><Login initialRole="operator" onSignIn={signIn}/></section>
     </div>}
     {session?.actor && <>
       {notice && <div className="callout callout--blue receipt" role="status"><Icon name="check"/><p>{notice}</p>
@@ -264,25 +278,24 @@ export function App() {
       {error && dialog !== "reset" && <InlineError problem={error}/>}
       {route.view === "mission" && <>
         <div className="page-heading mission-heading">
-          <div><h1>Mission Control</h1><p>Monitor incidents and verified recovery across the synthetic merchant network.</p></div>
+          <div><h1>Operations overview</h1><p>Merchant device, support and settlement incidents across all zones.</p></div>
           {canOperate && <div className="mission-controls">
-            <button className="button button--quiet" onClick={() => { setError(undefined); setDialog("reset") }} disabled={Boolean(busy)}><Icon name="reset" size={16}/> Reset Demo</button>
-            <SimulationForm run={inject} pending={Boolean(busy)}/>
+            <button className="button button--quiet" onClick={() => { setError(undefined); setDialog("reset") }} disabled={Boolean(busy)}><Icon name="reset" size={16}/> Reset sandbox</button>
           </div>}
         </div>
         {dashboard.error && <InlineError problem={dashboard.error} retry={dashboard.refresh}/>}
-        {dashboard.loading && <Skeleton text="Loading network activity…"/>}
-        {dashboard.data && <MissionControl data={dashboard.data}/>}
+        {dashboard.loading && <Skeleton text="Loading operations overview…"/>}
+        {dashboard.data && <MissionControl data={dashboard.data} metrics={metrics.data} jobs={jobs.data} canRun={canOperate} busy={Boolean(busy)} runJob={runJob}/>}
       </>}
       {route.view === "incident" && (!incidentId ? <>
-        <div className="page-heading"><div><h1>Incident War Room</h1><p>Open an incident to see its investigation, evidence and recovery.</p></div></div>
+        <div className="page-heading"><div><h1>Incidents</h1><p>Open an incident to see what was detected, how it was traced, and whether it recovered.</p></div></div>
         {dashboard.error && <InlineError problem={dashboard.error} retry={dashboard.refresh}/>}
         {dashboard.loading && <Skeleton text="Loading incidents…"/>}
         {dashboard.data && <IncidentList incidents={dashboard.data.incidents} picker/>}
       </> : <>
         {incident.error && <InlineError problem={incident.error} retry={incident.refresh}/>}
         {incident.error?.status === 404 && <div className="card"><EmptyState title="No incident at this link" action={<a href={incidentHref()} className="button button--quiet">Browse incidents</a>}>
-          The link may belong to an earlier demo generation.
+          The incident may belong to an earlier sandbox run.
         </EmptyState></div>}
         {incident.loading && <Skeleton text="Loading incident evidence…"/>}
         {incident.data && <WarRoom key={sessionKey + incidentId} data={incident.data} deepEvidence={route.evidenceId}
@@ -291,19 +304,19 @@ export function App() {
           resume={() => void operate("resume", (scope) => api.investigate(scope, incidentId), () => setNotice("Investigation queued."))}/>}
       </>)}
       {route.view === "approvals" && <>
-        <div className="page-heading"><div><h1>Human Approval Center</h1><p>Review exact actions, their evidence, and how recovery will be verified.</p></div></div>
+        <div className="page-heading"><div><h1>Approvals</h1><p>Restricted actions waiting for a human decision, with the exact targets, evidence and recovery check.</p></div></div>
         {approvals.error && <InlineError problem={approvals.error} retry={approvals.refresh}/>}
         {approvals.loading && <Skeleton text="Loading approval history…"/>}
         {approvals.data && <ApprovalCenter key={sessionKey + (route.id ?? "/queue")} data={approvals.data} selectedId={route.id}
           role={session.actor.role} onDecide={decide} onDone={onDecision}/>}
       </>}
-      <footer className="workspace-footer">Hackathon prototype · No live Paytm connections</footer>
+      <footer className="workspace-footer">Merchant Reliability OS · Sandbox environment</footer>
     </>}
-    {dialog === "role" && session?.actor && <Dialog title="Switch demo role" onDismiss={() => setDialog(undefined)}>
+    {dialog === "role" && session?.actor && <Dialog title="Switch role" onDismiss={() => setDialog(undefined)}>
       <Login initialRole={session.actor.role === "operator" ? "approver" : "operator"} onSignIn={signIn} button="Sign in with this role"/>
     </Dialog>}
-    {dialog === "reset" && session?.actor && <Dialog title="Reset this demo?" onDismiss={() => setDialog(undefined)} busy={busy === "reset"}>
-      <p>Start a fresh demo generation and clear this workspace’s current incidents and approval requests.</p>
+    {dialog === "reset" && session?.actor && <Dialog title="Reset the sandbox?" onDismiss={() => setDialog(undefined)} busy={busy === "reset"}>
+      <p>Start a fresh sandbox run. Current incidents, approvals and job runs are archived and the merchant network is restored.</p>
       {error && <InlineError problem={error}/>}
       <div className="dialog-actions">
         <button className="button button--secondary" disabled={Boolean(busy)} onClick={() => setDialog(undefined)}>Cancel</button>

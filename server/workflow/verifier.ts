@@ -9,7 +9,8 @@ import {
   addAudit, addEscalation, getAction, getState, latestVerification, listActionTargets, listActions, saveState,
   type ActionRow, type ActionTargetRow,
 } from "./store.js"
-import { FencedError, addMs, guardJob, opaqueId, parseJson, scopeOf } from "./util.js"
+import { FencedError, addMs, guardJob, opaqueId, scopeOf } from "./util.js"
+import { linkGroupsOfAction } from "./executor.js"
 
 export const REQUIRED_SIGNALS: Observation["kind"][] = ["heartbeat", "config", "notification_probe"]
 const SIGNAL_LABEL: Record<Observation["kind"], string> = { heartbeat: "heartbeat", config: "expected configuration", notification_probe: "notification probe" }
@@ -28,7 +29,7 @@ export function evaluateDevice(
   if (!attempt) return { check: { deviceId, actionId: null, status: "FAIL", reason: "No committed remediation attempt.", evidenceIds: [] }, deadline: null }
   const deadline = addMs(attempt.applied_at, windowMs)
   if (!attempt.ok) {
-    return { check: { deviceId, actionId: attempt.action_id, status: "FAIL", reason: `Simulator reported the action failed${attempt.reason ? `: ${attempt.reason}` : ""}.`, evidenceIds: [] }, deadline }
+    return { check: { deviceId, actionId: attempt.action_id, status: "FAIL", reason: `Device reported the action failed${attempt.reason ? `: ${attempt.reason}` : ""}.`, evidenceIds: [] }, deadline }
   }
   const relevant = observations
     .filter((o) => o.deviceId === deviceId && o.sequence > attempt.prior_sequence && o.occurredAt >= attempt.applied_at && o.occurredAt <= cutoff)
@@ -77,10 +78,10 @@ function evaluateDevices(core: CoreRuntime, tx: Sql, scope: Scope, incident: Cor
 }
 
 function evaluateLinks(core: CoreRuntime, tx: Sql, scope: Scope, action: ActionRow, cutoff: string, windowMs: number): DeviceEvaluation[] {
-  const [primary, ...dups] = parseJson<string[]>(action.target_ids, [])
-  const records = new Map(core.evidence.read(tx, scope, { kind: "ticket", ids: dups }).map((r) => [r.id, r]))
+  const pairs = linkGroupsOfAction(action).flatMap((g) => g.duplicateTicketIds.map((id) => ({ id, primary: g.primaryTicketId })))
+  const records = new Map(core.evidence.read(tx, scope, { kind: "ticket", ids: pairs.map((p) => p.id), limit: 200 }).map((r) => [r.id, r]))
   const deadline = addMs(action.executed_at ?? cutoff, windowMs)
-  return dups.map((id) => {
+  return pairs.map(({ id, primary }) => {
     const rec = records.get(id)
     const link = rec ? ticketLinkTarget(rec) : null
     const check: DeviceCheck = link === primary

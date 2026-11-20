@@ -1,7 +1,7 @@
 // Illustrative response envelopes for consumers (Owner 02 / 03) to build against.
 // Stable illustrative IDs. NEVER feed these to a real investigator: they contain the
 // expected answer (which devices need a restart).
-import type { ApiError, ApiOk, ApprovalView, DashboardView, IncidentView, RecoveryView, SessionView } from "./http.js"
+import type { ApiError, ApiOk, ApprovalView, DashboardView, GroupingView, IncidentView, MetricsView, RecoveryView, SessionView } from "./http.js"
 
 const devices = Array.from({ length: 24 }, (_, i) => `dev_ex_${String(i + 1).padStart(2, "0")}`)
 const needsRestart = devices.slice(20)
@@ -34,6 +34,22 @@ export const exampleApproval: ApprovalView = {
   expectedCheck: "Fresh notification_probe PASS on all 4 targets."
 }
 
+export const exampleGrouping: GroupingView = {
+  rule: "same model + config version + error signature, >= 3 distinct merchants within 5 minutes",
+  signals: [{ label: "Device model", value: "SBX-AI-2" }, { label: "Config version", value: "7.4.1" }, { label: "Error signature", value: "NOTIFY_PUSH_DROPPED" }],
+  window: { start: at(1), end: at(5) }, windowMinutes: 5, minMerchants: 3,
+  counts: { records: 24, merchants: 21, devices: 24 },
+  excluded: [{ key: "SBX-AI-2|7.4.1|NOTIFY_PUSH_DROPPED", reason: "outside correlation window", count: 2 }],
+  note: "The shared configuration is a correlation, not a proven root cause.",
+  outreach: { complainedMerchants: 9, silentMerchants: 12, silentMerchantIds: ["mer_ex_003"] }
+}
+
+export const exampleMetrics: ApiOk<MetricsView> = {
+  data: { generation: 1, simulated: true, metrics: [
+    { key: "grouping_quality", label: "Incident grouping quality", value: "100%", numerator: 24, denominator: 24, detail: "24 of 24 manifest devices grouped." }
+  ] }
+}
+
 export const exampleSession: ApiOk<SessionView> = { data: { generation: 1, actor: { id: "act_operator", role: "operator" }, csrfToken: "csrf_example" } }
 
 export const examplePendingIncident: ApiOk<IncidentView> = {
@@ -47,7 +63,14 @@ export const examplePendingIncident: ApiOk<IncidentView> = {
         hypothesis: "Config 7.4.1 notification setting (unproven)", evidenceIds: [devices[0]!], uncertainty: "Cause not confirmed",
         missingEvidence: [] },
       trace: [], audit: [], actions: [], approvals: [exampleApproval], recovery: recovery(20, needsRestart)
-    }
+    },
+    grouping: exampleGrouping,
+    profile: {
+      displayId: "INC-20261120-001", incidentType: "DEVICE_ALERT_OUTAGE", typeLabel: "Soundbox voice-alert outage",
+      description: "Soundboxes stopped announcing successful payments.", threshold: "≥ 3 merchants · same model + config + error code · within 5 minutes",
+      zone: "North-1", detectedBy: { jobId: "voice-alert-sweep", jobName: "Payment voice-alert health sweep", cron: "*/15 * * * *", scheduleLabel: "Every 15 minutes", ranAt: at(0) }
+    },
+    signals: []
   }
 }
 

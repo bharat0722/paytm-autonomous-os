@@ -92,17 +92,17 @@ async function openAs(browser: Browser, app: AppFixture, role: Role, viewport = 
   const context = await browser.newContext({ viewport, reducedMotion: "reduce" })
   const page = await context.newPage()
   await page.goto(app.origin)
-  await expect(page.getByText("SYNTHETIC DEMO", { exact: true })).toBeVisible()
+  await expect(page.locator(".env-badge")).toBeVisible()
   await page.getByRole("combobox", { name: "Role", exact: true }).selectOption(role)
   await page.getByLabel("Access code", { exact: true }).fill(app.codes[role])
   await page.getByRole("button", { name: "Sign in", exact: true }).click()
-  await expect(page.getByRole("heading", { name: "Mission Control", exact: true })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Operations overview", exact: true })).toBeVisible()
   return page
 }
 
 function nav(page: Page) { return page.getByRole("navigation", { name: "Workspace" }) }
-async function mission(page: Page) { await nav(page).getByRole("link", { name: "Mission Control" }).click() }
-async function approvalCenter(page: Page) { await nav(page).getByRole("link", { name: "Human Approval Center" }).click() }
+async function mission(page: Page) { await nav(page).getByRole("link", { name: "Overview" }).click() }
+async function approvalCenter(page: Page) { await nav(page).getByRole("link", { name: "Approvals" }).click() }
 
 async function apiRead<T>(page: Page, origin: string, path: string): Promise<T> {
   const response = await page.request.get(origin + "/api/v1" + path)
@@ -112,16 +112,22 @@ async function apiRead<T>(page: Page, origin: string, path: string): Promise<T> 
 
 async function reset(page: Page) {
   await mission(page)
-  await page.getByRole("button", { name: "Reset Demo", exact: true }).click()
-  const dialog = page.getByRole("dialog", { name: "Reset this demo?" })
+  await page.getByRole("button", { name: "Reset sandbox", exact: true }).click()
+  const dialog = page.getByRole("dialog", { name: "Reset the sandbox?" })
   await dialog.getByRole("button", { name: "Confirm reset" }).click()
   await expect(dialog).toBeHidden()
   await expect(page.getByTestId("kpi-activeIncidents")).toHaveText("0")
 }
 
+async function runJob(page: Page, name: string, drill = false) {
+  const jobs = page.getByRole("region", { name: "Detection jobs" })
+  if (drill) await jobs.getByLabel("Failure drill").check()
+  await jobs.getByRole("button", { name: `Run ${name} now` }).click()
+  await expect(page).toHaveURL(/#\/incidents\/[^/]+$/)
+}
+
 async function startSoundbox(page: Page, variant: "success" | "partial" = "success") {
-  await page.getByLabel("Recovery variant").selectOption(variant)
-  await page.getByRole("button", { name: "Run Simulation", exact: true }).click()
+  await runJob(page, "Payment voice-alert health sweep", variant === "partial")
   await expect(page).toHaveURL(/#\/incidents\/[^/]+$/)
   const url = page.url()
   const id = decodeURIComponent(url.slice(url.lastIndexOf("/") + 1))
@@ -133,9 +139,9 @@ async function startSoundbox(page: Page, variant: "success" | "partial" = "succe
 async function recordDecision(page: Page, decision: "approve" | "reject", note?: string) {
   await approvalCenter(page)
   const detail = page.getByRole("region", { name: "Approval details" })
-  const name = decision === "approve" ? "Approve simulated restart" : "Reject"
+  const name = decision === "approve" ? "Approve remote restart" : "Reject"
   await detail.getByRole("button", { name, exact: true }).click()
-  const dialog = page.getByRole("dialog", { name: decision === "approve" ? "Confirm simulated restart" : "Reject restart request" })
+  const dialog = page.getByRole("dialog", { name: decision === "approve" ? "Confirm remote restart" : "Reject restart request" })
   await expect(dialog.getByRole("list", { name: "Exact target devices" }).getByRole("listitem")).toHaveCount(4)
   if (note) await dialog.getByLabel(/Reason/).fill(note)
   await dialog.getByRole("button", { name: decision === "approve" ? "Confirm approval" : "Confirm rejection" }).click()
@@ -168,7 +174,7 @@ test("three clean Soundbox runs recover 20 of 24, preserve the pending decision,
       const proposal = queue.approvals[0]!
       expect(proposal.targetDeviceIds).toEqual(pending.workflow.recovery!.remainingDeviceIds)
       await expect(operator.getByRole("heading", { name: "What the AI found" })).toBeVisible()
-      await expect(operator.getByText("Scripted fallback", { exact: true }).first()).toBeVisible()
+      await expect(operator.getByTestId("ai-engine")).toHaveText(/Scripted fallback/)
 
       if (run === 0) {
         await app.restart()
@@ -180,7 +186,7 @@ test("three clean Soundbox runs recover 20 of 24, preserve the pending decision,
         await operator.setViewportSize({ width: 1440, height: 900 })
         await approvalCenter(operator)
         await expect(operator.getByText("A signed-in approver can record a decision.")).toBeVisible()
-        await expect(operator.getByRole("button", { name: "Approve simulated restart" })).toHaveCount(0)
+        await expect(operator.getByRole("button", { name: "Approve remote restart" })).toHaveCount(0)
         const session = await apiRead<SessionView>(operator, app.origin, "/session")
         const denied = await operator.request.post(app.origin + "/api/v1/approvals/" + proposal.id + "/decision", {
           data: { decision: "approve", proposalRevision: proposal.proposalRevision },
@@ -189,7 +195,7 @@ test("three clean Soundbox runs recover 20 of 24, preserve the pending decision,
         expect(denied.status()).toBe(403)
         await operator.goto(url)
         await approvalCenter(approver)
-        await expect(approver.getByRole("button", { name: "Approve simulated restart" })).toBeVisible()
+        await expect(approver.getByRole("button", { name: "Approve remote restart" })).toBeVisible()
         await capture(approver, "approval-desktop")
         await approver.setViewportSize({ width: 390, height: 844 })
         await capture(approver, "approval-mobile")
@@ -220,6 +226,7 @@ test("three clean Soundbox runs recover 20 of 24, preserve the pending decision,
         expect(replay.status()).toBe(200)
         const afterReplay = await apiRead<IncidentView>(operator, app.origin, "/incidents/" + id)
         expect(afterReplay.workflow.actions.filter(({ kind }) => kind === "MOCK_RESTART_DEVICE")).toHaveLength(1)
+        await operator.getByRole("tab", { name: /Actions & approvals/ }).click()
         await expect(operator.getByRole("button", { name: "View device checks" })).toBeVisible()
         await operator.getByRole("button", { name: "View device checks" }).click()
         await expect(operator.getByRole("row").filter({ hasText: "Passed" })).toHaveCount(24)
@@ -269,8 +276,8 @@ test("expired confirmation reports the API error and keeps the incident unresolv
   const approver = await openAs(browser, app, "approver")
   const { url } = await startSoundbox(operator)
   await approvalCenter(approver)
-  await approver.getByRole("button", { name: "Approve simulated restart" }).click()
-  const dialog = approver.getByRole("dialog", { name: "Confirm simulated restart" })
+  await approver.getByRole("button", { name: "Approve remote restart" }).click()
+  const dialog = approver.getByRole("dialog", { name: "Confirm remote restart" })
   await expect(dialog).toBeVisible()
   app.advance(DEFAULT_OPTIONS.approvalTtlMs + 1)
   await dialog.getByRole("button", { name: "Confirm approval" }).click()
@@ -286,10 +293,10 @@ test("reset during a queued run clears current views and fences the old generati
   const operator = await openAs(browser, app, "operator")
   app.pause()
   const previous = await apiRead<SessionView>(operator, app.origin, "/session")
-  await operator.getByRole("button", { name: "Run Simulation", exact: true }).click()
+  await runJob(operator, "Payment voice-alert health sweep")
   await expect(operator.getByTestId("incident-status")).toHaveText("Detected")
   const oldUrl = operator.url()
-  await operator.getByRole("button", { name: "Reset demo", exact: true }).click()
+  await operator.getByRole("button", { name: "Reset sandbox", exact: true }).click()
   await operator.getByRole("button", { name: "Confirm reset" }).click()
   await expect(operator).toHaveURL(/#\/$/)
   await expect(operator.getByTestId("kpi-activeIncidents")).toHaveText("0")
@@ -309,14 +316,14 @@ test("anonymous users and API failures have clear recovery actions", async ({ br
   const context = await browser.newContext()
   const page = await context.newPage()
   await page.goto(app.origin + "/#/approvals")
-  await expect(page.getByRole("heading", { name: "Sign in to the demo" })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible()
   expect((await page.request.get(app.origin + "/api/v1/approvals")).status()).toBe(401)
   await page.getByLabel("Access code").fill("invalid-code")
   await page.getByRole("button", { name: "Sign in", exact: true }).click()
   await expect(page.getByRole("alert")).toContainText("Invalid access code")
   await page.getByLabel("Access code").fill(app.codes.operator)
   await page.getByRole("button", { name: "Sign in", exact: true }).click()
-  await expect(page.getByRole("heading", { name: "Human Approval Center", exact: true })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Approvals", exact: true })).toBeVisible()
   await page.route("**/api/v1/dashboard", (route) => route.abort("failed"), { times: 1 })
   await mission(page)
   await expect(page.getByRole("alert")).toContainText("Connection interrupted")
@@ -327,15 +334,12 @@ test("anonymous users and API failures have clear recovery actions", async ({ br
 
 test("support ticket linking and read-only settlement escalation have their own outcomes", async ({ browser, app }) => {
   const page = await openAs(browser, app, "operator")
-  const select = page.getByLabel("Scenario", { exact: true })
-  await select.selectOption("duplicate-tickets")
-  await page.getByRole("button", { name: "Run Simulation", exact: true }).click()
+  await runJob(page, "Support queue de-duplication")
   await expect(page.getByTestId("incident-status")).toHaveText("Ticket linking complete")
   await expect(page.getByTestId("recovery-count")).toHaveCount(0)
   await expect(page.getByTestId("ticket-check-count")).toContainText("ticket links verified")
   await mission(page)
-  await select.selectOption("settlement-discrepancy")
-  await page.getByRole("button", { name: "Run Simulation", exact: true }).click()
+  await runJob(page, "Daily settlement reconciliation")
   await expect(page.getByTestId("incident-status")).toHaveText("Escalated")
   await expect(page.getByRole("heading", { name: "Read-only settlement handoff" })).toBeVisible()
   await expect(page.getByText(/Assigned to/)).toBeVisible()
@@ -348,27 +352,27 @@ test("the three views fit the brief’s viewport sizes and visible focus works",
     await page.setViewportSize({ width, height: 900 })
     for (const path of ["/#/", new URL(url).hash, "/#/approvals"]) {
       await page.goto(app.origin + path)
-      await expect(page.getByText("SYNTHETIC DEMO", { exact: true })).toBeVisible()
+      await expect(page.locator(".env-badge")).toBeVisible()
       await expect(page.getByRole("main").getByRole("heading", { level: 1 })).toBeVisible()
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
     }
   }
   await page.reload()
-  await expect(page.getByRole("heading", { name: "Human Approval Center", exact: true })).toBeVisible()
+  await expect(page.getByRole("heading", { name: "Approvals", exact: true })).toBeVisible()
   await page.keyboard.press("Tab")
   await expect(page.getByRole("link", { name: "Skip to content" })).toBeFocused()
   await page.keyboard.press("Enter")
   await expect(page.getByRole("main")).toBeFocused()
   await page.getByRole("button", { name: "Switch role" }).click()
-  await expect(page.getByRole("dialog", { name: "Switch demo role" })).toBeVisible()
+  await expect(page.getByRole("dialog", { name: "Switch role" })).toBeVisible()
   await page.keyboard.press("Escape")
   await expect(page.getByRole("button", { name: "Switch role" })).toBeFocused()
   await page.getByRole("button", { name: "Switch role" }).click()
-  const roleDialog = page.getByRole("dialog", { name: "Switch demo role" })
+  const roleDialog = page.getByRole("dialog", { name: "Switch role" })
   await roleDialog.getByLabel("Access code").fill(app.codes.approver)
   await roleDialog.getByRole("button", { name: "Sign in with this role" }).click()
   await expect(roleDialog).toBeHidden()
-  await expect(page.getByRole("button", { name: "Approve simulated restart" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Approve remote restart" })).toBeVisible()
 })
 
 test.describe("scripted fallback", () => {
@@ -378,8 +382,57 @@ test.describe("scripted fallback", () => {
     const { id } = await startSoundbox(page)
     const incident = await apiRead<IncidentView>(page, app.origin, "/incidents/" + id)
     expect(incident.workflow.trace.some((entry) => entry.mode === "scripted_fallback")).toBe(true)
-    await expect(page.getByText("Scripted fallback", { exact: true }).first()).toBeVisible()
-    await page.getByRole("button", { name: "Show all activity" }).click()
+    await expect(page.getByTestId("ai-engine")).toHaveText(/Scripted fallback/)
+    await page.getByRole("tab", { name: /Investigation/ }).click()
     await expect(page.getByText(/No model configured for this test/).first()).toBeVisible()
   })
+})
+
+test("release candidate: grouping explanation, silent merchants, merchant view, honest AI label, measured metrics and full Scenario B linking", async ({ browser, app }) => {
+  const operator = await openAs(browser, app, "operator")
+  await reset(operator)
+  const { id } = await startSoundbox(operator)
+
+  const grouping = operator.getByRole("region", { name: "Why these were grouped" })
+  await expect(grouping.getByTestId("grouping-signals")).toContainText("SBX-AI-2")
+  await expect(grouping.getByTestId("grouping-signals")).toContainText("7.4.1")
+  await expect(grouping.getByTestId("grouping-counts")).toHaveText(/24 records · 21 merchants · 24 devices/)
+  await expect(grouping.getByTestId("grouping-excluded")).toHaveText("6 unrelated record(s)")
+  await expect(grouping.getByTestId("outreach")).toContainText("9merchants complained")
+  await expect(grouping.getByTestId("outreach")).toContainText("12affected but silent")
+  await expect(operator.getByTestId("ai-engine")).toHaveText(/Scripted fallback/)
+
+  // Merchant 360 from a silent merchant.
+  await grouping.getByText("Silent merchants", { exact: true }).click()
+  await grouping.getByTestId("outreach").locator("button.record-link").first().click()
+  await expect(operator.getByTestId("merchant-360")).toContainText("NOTIFICATION_FAILED")
+  await expect(operator.getByTestId("merchant-360")).toContainText("payment SUCCESS")
+  await operator.keyboard.press("Escape")
+
+  // Detection opens the chronology; the audit API starts with INCIDENT_DETECTED.
+  const audit = await apiRead<{ audit: { event: string }[] }>(operator, app.origin, `/incidents/${id}/audit`)
+  expect(audit.audit[0]!.event).toBe("INCIDENT_DETECTED")
+
+  // Restart request through the PRD action endpoint is pending, never executed.
+  const session = await apiRead<SessionView>(operator, app.origin, "/session")
+  const pendingReq = await operator.request.post(`${app.origin}/api/v1/incidents/${id}/actions`, {
+    headers: { "X-CSRF-Token": session.csrfToken!, "X-Demo-Generation": String(session.generation) }, data: { kind: "MOCK_RESTART_DEVICE" },
+  })
+  expect(pendingReq.status()).toBe(202)
+  expect((await pendingReq.json()).data.path).toBe("APPROVAL_PENDING")
+
+  const approver = await openAs(browser, app, "approver")
+  await recordDecision(approver, "approve")
+  await operator.goto(app.origin + "/#/incidents/" + encodeURIComponent(id))
+  await expect(operator.getByTestId("recovery-count")).toHaveText("24 / 24", { timeout: 12000 })
+
+  await mission(operator)
+  await expect(operator.getByTestId("metric-verified_recovery")).toContainText("24 / 24")
+  await expect(operator.getByTestId("metric-grouping_quality")).toContainText("100%")
+  await expect(operator.getByTestId("metric-policy_compliance")).toContainText("100%")
+  await expect(operator.getByTestId("metric-demo_reproducibility")).toContainText("1 / 1")
+
+  // Scenario B: every merchant's duplicates linked and verified.
+  await runJob(operator, "Support queue de-duplication")
+  await expect(operator.getByTestId("ticket-check-count")).toHaveText("7 / 7 ticket links verified", { timeout: 12000 })
 })

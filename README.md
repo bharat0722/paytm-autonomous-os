@@ -7,7 +7,7 @@ Merchant Reliability OS is a hackathon prototype for investigating synthetic mer
 Use Node 24 and npm 11. From the repository root:
 
 ```sh
-npm ci
+npm ci            # on Windows without C++ build tools: npm ci --ignore-scripts
 cp .env.example .env
 ```
 
@@ -21,11 +21,30 @@ Open [the local workspace](http://localhost:5173). Sign in as **Operator** to ru
 
 For a single same-origin app, run `npm run build` and `npm run start:api`. The workflow server serves `dist/web` and `/api/v1` on port 3001 by default.
 
+**Internal team guide:** [docs/INTERNAL_RUNBOOK.md](docs/INTERNAL_RUNBOOK.md) covers setup, roles, the 4-minute demo, turning on Sarvam AI, the API reference and troubleshooting.
+
+## PRD feature coverage (FR-01 to FR-10)
+
+| Feature | Where to see it |
+|---|---|
+| FR-01 Seeded synthetic network | Same relationships after every Reset sandbox |
+| FR-02 Event injection | Run now on a detection job creates its batch; a repeat run returns the same incident |
+| FR-03 Correlation | War Room → **Why these were grouped** (shared fingerprint, window, records kept separate) |
+| FR-04 AI investigator | AI work log with real read-tool calls and an evidence-backed finding |
+| FR-05 Autonomous safe action | Mock config sync changes stored device records |
+| FR-06 Restricted action approval | Approvals page; `POST /incidents/:id/actions` returns pending or denied |
+| FR-07 Recovery verifier | 20 / 24 → approved restart → 24 / 24 from fresh signals only |
+| FR-08 Audit and memory | Audit opens with *Incident detected*; `GET /incidents/:id/audit` |
+| FR-09 Reliable demo | Reset, loading and error states, labelled scripted fallback, 3× rehearsal |
+| FR-10 Sarvam AI | `INVESTIGATOR_MODE=sarvam` + key; the engine badge shows **Sarvam live AI** |
+
+Also included: complained-vs-silent merchant outreach, a merchant view, simulated PRD §15 success metrics, and Scenario B linking every merchant's duplicates.
+
 ## Try the Soundbox incident
 
-1. In **Mission Control**, keep Soundbox and Complete recovery selected, then click **Run Simulation**.
+1. In **Operations overview**, click **Run now** on the *Payment voice-alert health sweep* detection job.
 2. In **Incident War Room**, inspect the records, work log and recovery. The verifier should report **20 / 24** while the restart proposal waits.
-3. In **Human Approval Center**, sign in as Approver, review the four exact targets, and confirm the simulated restart. Return to the incident to see the persisted **24 / 24** verification.
+3. In **Approvals page**, sign in as Approver, review the four exact targets, and confirm the remote restart. Return to the incident to see the persisted **24 / 24** verification.
 4. Reset and repeat with **Reject** or **Partial recovery**. The case stays escalated with **20 / 24** or **23 / 24** respectively.
 
 [Demo guide and verification details](docs/demo.md)

@@ -367,7 +367,7 @@ function finalize(
       decision = evaluateAction(
         { incident, retrieved: state.retrieved, latestChecks: latest ? deviceChecks(latest) : null, existingRestartApprovals: countRestartApprovals(tx, scope) },
         p.kind === "link"
-          ? { kind: "LINK_SUPPORT_TICKETS", primaryTicketId: p.primaryTicketId, duplicateTicketIds: p.decision.targetIds.slice(1) }
+          ? { kind: "LINK_SUPPORT_TICKETS", groups: p.groups }
           : { kind: p.kind === "sync" ? "MOCK_SYNC_DEVICE_CONFIG" : "MOCK_RESTART_DEVICE", targetIds: p.decision.targetIds },
       )
     }
@@ -415,11 +415,12 @@ function finalize(
       }
     } else if (p?.kind === "link" && decision?.allowed) {
       const auditId = addAudit(tx, scope, `${ep.episode_key}:link-proposed`, {
-        at: now, actor, event: "ACTION_AUTHORIZED", summary: `Policy ${decision.ruleId} authorized linking ${decision.targetIds.length - 1} duplicate tickets to ${p.primaryTicketId}.`,
+        at: now, actor, event: "ACTION_AUTHORIZED", summary: `Policy ${decision.ruleId} authorized: ${decision.reason}`,
         evidenceIds: p.evidenceIds,
       })
+      const groups = decision.groups ?? p.groups
       const a = insertAction(tx, scope, {
-        opKey: "link", kind: "LINK_SUPPORT_TICKETS", targetIds: decision.targetIds, args: { primaryTicketId: p.primaryTicketId },
+        opKey: "link", kind: "LINK_SUPPORT_TICKETS", targetIds: decision.targetIds, args: { primaryTicketId: groups[0]?.primaryTicketId ?? p.primaryTicketId, groups },
         ruleId: decision.ruleId, summary: truncate(p.rationale, 400), requiresApproval: false, evidenceIds: p.evidenceIds, auditId, at: now,
       })
       if (a.created) {

@@ -5,7 +5,8 @@ import { CORE_DEFAULTS, CoreError, initialInvestigationKey, type Sql } from "../
 import type { CoreDb } from "./db.js"
 import { advanceTelemetry, assertActive } from "./generations.js"
 import { enqueueJob } from "./jobs.js"
-import { NOTIFY_SIGNATURE, PRIVATE_FIXTURE, TELEMETRY_BASE } from "./seed.js"
+import { PRIVATE_FIXTURE, TELEMETRY_BASE } from "./seed.js"
+import { DETECTION_JOBS, defaultJobFor, jobById, type DetectionJob } from "./datasets.js"
 import { addMs, newId, prng, type Clock } from "./util.js"
 
 const WINDOW_MS = CORE_DEFAULTS.correlationWindowMinutes * 60_000
@@ -66,27 +67,35 @@ function createIncident(ctx: Ctx, scenario: Scenario, title: string, severity: s
 }
 
 // ---------- Scenario A: Soundbox notification failures ----------
-function injectSoundbox(ctx: Ctx, variant: Variant): string {
+function injectSoundbox(ctx: Ctx, variant: Variant, job: DetectionJob): string {
   const { tx, generation, batchId } = ctx
-  const r = prng(7)
-  const t0 = addMs(TELEMETRY_BASE, 60_000)
+  const c = job.cohort!
+  const r = prng(7 + DETECTION_JOBS.indexOf(job))
+  const t0 = addMs(TELEMETRY_BASE, (1 + DETECTION_JOBS.indexOf(job) * 11) * 60_000)
   const events: { device: string; merchant: string; model: string; config: string; sig: string; at: string }[] = []
-  PRIVATE_FIXTURE.targetDeviceRefs.forEach((seedRef, i) => {
+  const spacing = Math.max(4_000, Math.floor(220_000 / c.targetRefs.length))
+  c.targetRefs.forEach((seedRef, i) => {
     const d = deviceByRef(tx, generation, seedRef)
-    events.push({ device: d.id, merchant: d.merchant_id, model: d.model, config: d.config_version, sig: NOTIFY_SIGNATURE, at: addMs(t0, i * 9_000 + r.int(0, 4000)) })
+    events.push({ device: d.id, merchant: d.merchant_id, model: d.model, config: d.config_version, sig: c.signature, at: addMs(t0, i * spacing + r.int(0, 3000)) })
   })
-  // Distractors: same signature outside the window; other signature; same model on another config.
-  for (const seedRef of PRIVATE_FIXTURE.outOfWindowRefs) {
+  // Distractors: same signature outside the window; other signature; another config or code.
+  for (const seedRef of c.outOfWindowRefs) {
     const d = deviceByRef(tx, generation, seedRef)
-    events.push({ device: d.id, merchant: d.merchant_id, model: d.model, config: d.config_version, sig: NOTIFY_SIGNATURE, at: addMs(TELEMETRY_BASE, -40 * 60_000) })
+    events.push({ device: d.id, merchant: d.merchant_id, model: d.model, config: d.config_version, sig: c.signature, at: addMs(t0, -40 * 60_000) })
   }
-  for (const seedRef of PRIVATE_FIXTURE.otherSignatureRefs) {
+  for (const seedRef of c.otherSignature.refs) {
     const d = deviceByRef(tx, generation, seedRef)
-    events.push({ device: d.id, merchant: d.merchant_id, model: d.model, config: d.config_version, sig: "NOTIFY_TIMEOUT", at: addMs(t0, 30_000) })
+    events.push({ device: d.id, merchant: d.merchant_id, model: d.model, config: d.config_version, sig: c.otherSignature.signature, at: addMs(t0, 30_000) })
   }
-  for (const seedRef of PRIVATE_FIXTURE.otherConfigRefs) {
+  for (const seedRef of c.otherConfig.refs) {
     const d = deviceByRef(tx, generation, seedRef)
-    events.push({ device: d.id, merchant: d.merchant_id, model: d.model, config: d.config_version, sig: "AUDIO_DRIVER_ERR", at: addMs(t0, 45_000) })
+    events.push({ device: d.id, merchant: d.merchant_id, model: d.model, config: d.config_version, sig: c.otherConfig.signature, at: addMs(t0, 45_000) })
+  }
+  // Private remediation behaviour for this cohort (never exposed through evidence).
+  for (const seedRef of c.targetRefs) {
+    const d = deviceByRef(tx, generation, seedRef)
+    tx.run("UPDATE sim_device_behavior SET needs_restart = ?, restart_fails = 0, affected_config = ?, target_config = ? WHERE device_id = ?",
+      [c.needsRestartRefs.includes(seedRef) ? 1 : 0, c.affectedConfig, c.fixedConfig, d.id])
   }
   const candidates: Candidate[] = []
   const eventIdByDevice = new Map<string, string>()
@@ -100,17 +109,16 @@ function injectSoundbox(ctx: Ctx, variant: Variant): string {
     tx.run("INSERT INTO payments (id, generation, merchant_id, device_id, amount_paise, method, status, occurred_at) VALUES (?,?,?,?,?,?,?,?)",
       [newId("pay"), generation, e.merchant, e.device, r.int(30, 1800) * 100, "UPI", "SUCCESS", addMs(e.at, -4_000)])
   }
-  // Merchant tickets about silent Soundboxes.
-  for (const m of PRIVATE_FIXTURE.soundboxTicketMerchants) {
+  // Merchant complaints about the affected Soundboxes.
+  for (const m of c.ticketMerchants) {
     const mid = merchantByRef(tx, generation, m)
     const dev = deviceByRef(tx, generation, `D-${m}-1`)
     tx.run(`INSERT INTO tickets (id, generation, batch_id, seed_ref, merchant_id, device_id, category, subject, status, linked_to, created_at)
             VALUES (?,?,?,?,?,?,?,?,?,NULL,?)`,
-      [newId("tkt"), generation, batchId, `T-SBX-${m}`, mid, dev.id, "SOUNDBOX_SILENT", "Payment received but Soundbox did not announce", "OPEN", addMs(t0, 5 * 60_000)])
+      [newId("tkt"), generation, batchId, `T-${job.id}-${m}`, mid, dev.id, c.ticketCategory, c.ticketSubject, "OPEN", addMs(t0, 5 * 60_000)])
   }
-  // Private behaviour for this variant.
   if (variant === "partial") {
-    const d = deviceByRef(tx, generation, PRIVATE_FIXTURE.partialFailRef)
+    const d = deviceByRef(tx, generation, c.partialFailRef)
     tx.run("UPDATE sim_device_behavior SET restart_fails = 1 WHERE device_id = ?", [d.id])
   }
 
@@ -120,7 +128,8 @@ function injectSoundbox(ctx: Ctx, variant: Variant): string {
   const [model, config, sig] = group.key.split("|")
   const deviceIds = group.members.map((m) => m.recordId)
   const incidentId = createIncident(ctx, "soundbox",
-    `Soundbox payment notifications failing (${deviceIds.length} devices, model ${model}, config ${config})`, "HIGH", {
+    `${job.typeLabel}: ${model} on config ${config} (${deviceIds.length} devices, ${job.zone})`, job.severity, {
+      jobId: job.id,
       rule: "same model + config version + error signature, >= 3 distinct merchants within 5 minutes",
       windowMinutes: CORE_DEFAULTS.correlationWindowMinutes, minMerchants: MIN_MERCHANTS,
       shared: { model, configVersion: config, errorSignature: sig },
@@ -178,7 +187,8 @@ function injectDuplicateTickets(ctx: Ctx): string {
   if (!group) throw new CoreError("INVALID_INPUT", "Injection produced no correlated group.")
   const ticketIds = group.members.map((m) => m.recordId)
   const incidentId = createIncident(ctx, "duplicate-tickets",
-    `Duplicate support tickets: "${subject}" (${ticketIds.length} tickets, ${group.merchants.length} merchants)`, "LOW", {
+    `Repeated merchant complaints: "${subject}" (${ticketIds.length} tickets from ${group.merchants.length} merchants)`, "LOW", {
+      jobId: "support-dedupe",
       rule: "same category + subject, >= 3 distinct merchants within 5 minutes",
       windowMinutes: CORE_DEFAULTS.correlationWindowMinutes, minMerchants: MIN_MERCHANTS,
       window: { start: group.windowStart, end: group.windowEnd }, ticketCount: ticketIds.length,
@@ -220,7 +230,8 @@ function injectSettlement(ctx: Ctx): string {
   if (!group) throw new CoreError("INVALID_INPUT", "Injection produced no correlated group.")
   const ids = group.members.map((m) => m.recordId)
   const incidentId = createIncident(ctx, "settlement-discrepancy",
-    `Settlement shortfall on batch NEFT-B1119-07 (${group.merchants.length} merchants)`, "MEDIUM", {
+    `Settlement shortfall: bank batch NEFT-B1119-07 (${group.merchants.length} merchants credited short)`, "MEDIUM", {
+      jobId: "settlement-recon",
       rule: "same bank batch + SHORT status, >= 3 distinct merchants", minMerchants: MIN_MERCHANTS,
       merchantCount: group.merchants.length, excluded, accessMode: "read-only",
       note: "Settlement records are read-only; resolution requires a human finance handoff."
@@ -232,25 +243,27 @@ function injectSettlement(ctx: Ctx): string {
 }
 
 /**
- * Inject a scenario once per generation. An identical replay returns the existing IDs;
- * a different variant for the same scenario is a conflict until reset.
+ * Run one detection job (ingest its dataset) once per generation. An identical replay returns
+ * the existing IDs; a different variant for the same job is a conflict until reset.
  */
-export function injectScenario(db: CoreDb, clock: Clock, expectedGeneration: number, scenario: Scenario, variant: Variant): InjectResult {
-  if (variant === "partial" && scenario !== "soundbox") throw new CoreError("INVALID_INPUT", "Only the soundbox scenario accepts the partial variant.")
+export function injectScenario(db: CoreDb, clock: Clock, expectedGeneration: number, scenario: Scenario, variant: Variant, jobId?: string): InjectResult {
+  const job = jobId ? jobById(jobId) : defaultJobFor(scenario)
+  if (!job || job.scenario !== scenario) throw new CoreError("INVALID_INPUT", `Unknown detection job ${String(jobId)} for ${scenario}.`)
+  if (variant === "partial" && !job.supportsPartial) throw new CoreError("INVALID_INPUT", "Only device detection jobs accept the partial variant.")
   return db.write((tx) => {
     assertActive(tx, expectedGeneration)
     const existing = tx.get<{ id: string; variant: string; incident_id: string }>(
-      "SELECT id, variant, incident_id FROM batches WHERE generation = ? AND scenario = ?", [expectedGeneration, scenario])
+      "SELECT id, variant, incident_id FROM batches WHERE generation = ? AND scenario = ?", [expectedGeneration, job.batchKey])
     if (existing) {
-      if (existing.variant !== variant) throw new CoreError("CONFLICT", `Scenario ${scenario} was already injected with variant ${existing.variant}; reset first.`)
+      if (existing.variant !== variant) throw new CoreError("CONFLICT", `${job.name} already ran with variant ${existing.variant}; reset first.`)
       return { generation: expectedGeneration, batchId: existing.id, incidentId: existing.incident_id }
     }
     const batchId = newId("bat")
     const now = clock.now()
     tx.run("INSERT INTO batches (id, generation, scenario, variant, created_at, incident_id) VALUES (?,?,?,?,?,NULL)",
-      [batchId, expectedGeneration, scenario, variant, now])
+      [batchId, expectedGeneration, job.batchKey, variant, now])
     const ctx: Ctx = { tx, generation: expectedGeneration, batchId, now }
-    const incidentId = scenario === "soundbox" ? injectSoundbox(ctx, variant)
+    const incidentId = scenario === "soundbox" ? injectSoundbox(ctx, variant, job)
       : scenario === "duplicate-tickets" ? injectDuplicateTickets(ctx) : injectSettlement(ctx)
     enqueueJob(tx, clock, { generation: expectedGeneration, incidentId, key: initialInvestigationKey(incidentId), kind: "workflow.investigate", runAfter: now, payload: {} })
     return { generation: expectedGeneration, batchId, incidentId }

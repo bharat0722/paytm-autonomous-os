@@ -137,22 +137,34 @@ function duplicateTickets(state: ToolState): Step {
     const key = String(t.details.merchantId ?? "unknown")
     groups.set(key, [...(groups.get(key) ?? []), t])
   }
-  const group = [...groups.values()].sort((a, b) => b.length - a.length)[0] ?? []
-  const primary = group.find((t) => !ticketLinkTarget(t))
-  const dups = primary ? group.filter((t) => t.id !== primary.id && !ticketLinkTarget(t)) : []
-  if (primary && dups.length && !state.proposal && !proposalDenied(state, "propose_ticket_link")) {
+  // One group per merchant: earliest unlinked ticket is primary; tickets already linked
+  // to a different case are left alone (reported, never overwritten).
+  const linkGroups: { primaryTicketId: string; duplicateTicketIds: string[] }[] = []
+  const skipped: string[] = []
+  for (const group of groups.values()) {
+    const primary = group.find((t) => !ticketLinkTarget(t))
+    if (!primary) continue
+    const dups = group.filter((t) => t.id !== primary.id && !ticketLinkTarget(t))
+    skipped.push(...group.filter((t) => t.id !== primary.id && ticketLinkTarget(t) && ticketLinkTarget(t) !== primary.id).map((t) => t.id))
+    if (dups.length) linkGroups.push({ primaryTicketId: primary.id, duplicateTicketIds: dups.map((d) => d.id) })
+  }
+  const dupCount = linkGroups.reduce((n, g) => n + g.duplicateTicketIds.length, 0)
+  if (linkGroups.length && !state.proposal && !proposalDenied(state, "propose_ticket_link")) {
     return tool("propose_ticket_link", {
-      primaryTicketId: primary.id,
-      duplicateTicketIds: dups.map((d) => d.id),
-      rationale: `${dups.length + 1} open tickets for merchant ${String(primary.details.merchantId ?? "unknown")} describe the same issue; the earliest is primary.`,
-      evidenceIds: [primary.id, ...dups.map((d) => d.id)],
+      groups: linkGroups,
+      rationale: `${dupCount} open duplicate tickets across ${linkGroups.length} merchants repeat an existing complaint; each merchant's earliest open ticket stays primary.`,
+      evidenceIds: linkGroups.flatMap((g) => [g.primaryTicketId, ...g.duplicateTicketIds]),
     })
   }
   return finding({
-    observations: [`Read ${tickets.length} support tickets.`, primary ? `Earliest unlinked ticket ${primary.id}; ${dups.length} eligible duplicates.` : "No unlinked primary ticket found."],
-    hypothesis: state.proposal ? "These tickets are duplicates of one merchant issue; linking reduces duplicate handling." : null,
-    evidenceIds: tickets.map((t) => t.id).slice(0, 20),
-    uncertainty: "Duplicate status is inferred from merchant and timing; stored links are verified after execution.",
+    observations: [
+      `Read ${tickets.length} support tickets from ${groups.size} merchants.`,
+      linkGroups.length ? `${dupCount} duplicates across ${linkGroups.length} merchant groups are eligible for linking.` : "No unlinked duplicate set was found.",
+      ...(skipped.length ? [`${skipped.length} ticket(s) already linked to a different case were left unchanged: ${skipped.join(", ")}.`] : []),
+    ],
+    hypothesis: state.proposal ? "Merchants re-raised the same complaint; linking duplicates to one primary per merchant removes repeated handling." : null,
+    evidenceIds: tickets.map((t) => t.id).slice(0, 30),
+    uncertainty: "Duplicate status is inferred from merchant, category and timing; stored links are verified after execution.",
     missingEvidence: state.proposal ? [] : ["No eligible duplicate set was found."],
   })
 }

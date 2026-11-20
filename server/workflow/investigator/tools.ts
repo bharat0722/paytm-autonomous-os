@@ -4,14 +4,14 @@
 import { z } from "zod"
 import type { CoreIncident, CoreRuntime, Sql } from "../../../shared/contracts/core.js"
 import type { DeviceCheck, EvidenceView, Scope } from "../../../shared/contracts/http.js"
-import { evaluateAction, type PolicyDecision } from "../policy.js"
+import { evaluateAction, type LinkGroup, type PolicyDecision } from "../policy.js"
 import { truncate } from "../util.js"
 import type { Stage, ToolDescriptor } from "./provider.js"
 
 export type Proposal =
   | { kind: "sync"; decision: PolicyDecision; rationale: string; evidenceIds: string[] }
   | { kind: "restart"; decision: PolicyDecision; rationale: string; evidenceIds: string[] }
-  | { kind: "link"; decision: PolicyDecision; primaryTicketId: string; rationale: string; evidenceIds: string[] }
+  | { kind: "link"; decision: PolicyDecision; groups: LinkGroup[]; primaryTicketId: string; rationale: string; evidenceIds: string[] }
   | { kind: "handoff"; summary: string; evidenceIds: string[] }
   | { kind: "escalate"; reason: string; evidenceIds: string[] }
 
@@ -214,33 +214,40 @@ function deviceProposal(name: string, kind: "sync" | "restart", description: str
   }
 }
 
+const TicketId = z.string().min(1).max(120)
+const LinkGroupArgs = z.object({ primaryTicketId: TicketId, duplicateTicketIds: z.array(TicketId).min(1).max(50) }).strict()
 const LinkArgs = z.object({
-  primaryTicketId: z.string().min(1).max(120),
-  duplicateTicketIds: z.array(z.string().min(1).max(120)).min(1).max(50),
+  primaryTicketId: TicketId.optional(),
+  duplicateTicketIds: z.array(TicketId).min(1).max(50).optional(),
+  groups: z.array(LinkGroupArgs).min(1).max(25).optional(),
   rationale: z.string().min(1).max(600),
   evidenceIds: Cite,
-}).strict()
+}).strict().refine((a) => Boolean(a.groups?.length) || Boolean(a.primaryTicketId && a.duplicateTicketIds?.length),
+  { message: "Provide groups[] or primaryTicketId with duplicateTicketIds." })
 
 const proposeTicketLink: ToolDef<z.infer<typeof LinkArgs>> = {
   name: "propose_ticket_link",
   kind: "proposal",
-  description: "Propose linking eligible duplicate support tickets to one primary ticket (policy-checked).",
-  argsDoc: '{"primaryTicketId": string, "duplicateTicketIds": string[], "rationale": string, "evidenceIds": string[]}',
+  description: "Propose linking eligible duplicate support tickets: one group per merchant issue, each with an open primary ticket (policy-checked).",
+  argsDoc: '{"groups": [{"primaryTicketId": string, "duplicateTicketIds": string[]}], "rationale": string, "evidenceIds": string[]}',
   schema: LinkArgs,
   run(_q, state, args) {
     const missing = uncited(state, args.evidenceIds)
     if (missing.length) return citeError("propose_ticket_link", missing)
     const decision = evaluateAction(
       { incident: state.incident, retrieved: state.retrieved, latestChecks: null, existingRestartApprovals: 0 },
-      { kind: "LINK_SUPPORT_TICKETS", primaryTicketId: args.primaryTicketId, duplicateTicketIds: args.duplicateTicketIds },
+      { kind: "LINK_SUPPORT_TICKETS", ...(args.groups ? { groups: args.groups } : {}),
+        ...(args.primaryTicketId ? { primaryTicketId: args.primaryTicketId, duplicateTicketIds: args.duplicateTicketIds ?? [] } : {}) },
     )
     if (!decision.allowed) return denied("propose_ticket_link", decision)
+    const groups = decision.groups ?? []
+    const dupCount = groups.reduce((n, g) => n + g.duplicateTicketIds.length, 0)
     return {
       ok: true,
-      summary: `propose_ticket_link: ${decision.targetIds.length - 1} duplicates → ${args.primaryTicketId} (${decision.ruleId})`,
+      summary: `propose_ticket_link: ${dupCount} duplicates across ${groups.length} merchant ${groups.length === 1 ? "group" : "groups"} (${decision.ruleId})`,
       evidenceIds: args.evidenceIds, newEvidence: [], newCitable: [],
-      modelResult: { ok: true, accepted: true, ruleId: decision.ruleId, targetIds: decision.targetIds },
-      proposal: { kind: "link", decision, primaryTicketId: args.primaryTicketId, rationale: args.rationale, evidenceIds: args.evidenceIds },
+      modelResult: { ok: true, accepted: true, ruleId: decision.ruleId, targetIds: decision.targetIds, groups },
+      proposal: { kind: "link", decision, groups, primaryTicketId: groups[0]!.primaryTicketId, rationale: args.rationale, evidenceIds: args.evidenceIds },
     }
   },
 }

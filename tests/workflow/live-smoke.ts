@@ -2,9 +2,13 @@
 //   INVESTIGATOR_MODE=sarvam SARVAM_API_KEY=... SARVAM_MODEL=... npm run smoke:live
 // Uses the test fake core over temporary SQLite, so it proves the investigator's live
 // read-selection and grounded finding without the platform. Prints sanitized trace only.
+import { existsSync } from "node:fs"
 import { optionsFromEnv } from "../../server/workflow/config.js"
 import { makeHarness } from "./support/harness.js"
 
+// Read the same local .env the server uses (secrets stay on this machine).
+if (existsSync(".env")) { try { process.loadEnvFile(".env") } catch { /* ignore */ } }
+process.env.INVESTIGATOR_MODE = "sarvam"
 const options = optionsFromEnv()
 if (options.investigatorMode !== "sarvam" || !options.provider) {
   console.log(`SKIPPED live smoke: ${options.providerUnavailableReason ?? "INVESTIGATOR_MODE is not sarvam"}`)

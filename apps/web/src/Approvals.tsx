@@ -13,7 +13,7 @@ function Queue({ items, selected }: { items: ApprovalView[]; selected?: string }
   return <ul className="approval-rows">{items.map((item) => <li key={item.id}>
     <a href={approvalsHref(item.id)} aria-current={selected === item.id ? "location" : undefined}>
       <span className="mini-icon"><Icon name="shield" size={16}/></span>
-      <span className="approval-row-main"><strong>Simulated restart</strong><small>{item.targetDeviceIds.length} devices · <Time value={item.createdAt}/></small></span>
+      <span className="approval-row-main"><strong>Remote device restart</strong><small>{item.targetDeviceIds.length} devices · <Time value={item.createdAt}/></small></span>
       <ApprovalBadge status={item.status}/>
     </a>
   </li>)}</ul>
@@ -52,9 +52,9 @@ function DecisionDialog({ proposal, decision, dismiss, onDecide, onDone }: {
     }
   }
 
-  return <Dialog title={approve ? "Confirm simulated restart" : "Reject restart request"} onDismiss={dismiss} busy={busy}>
+  return <Dialog title={approve ? "Confirm remote restart" : "Reject restart request"} onDismiss={dismiss} busy={busy}>
     <form className="dialog-form" onSubmit={(event) => void submit(event)}>
-      <p>{approve ? "Approve a restart for these exact simulated devices." : "The incident will remain open for follow-up."}</p>
+      <p>{approve ? "Approve a restart for these exact devices." : "The incident will remain open for follow-up."}</p>
       <Targets ids={proposal.targetDeviceIds}/>
       <div className="policy-note"><Icon name="lock" size={16}/><div><strong>Policy</strong><code>{proposal.ruleId}</code></div></div>
       {!approve && <label className="field">Reason <span className="muted">(optional)</span><textarea rows={3} maxLength={500}
@@ -83,17 +83,17 @@ export function ApprovalCenter({ data, selectedId, role, onDecide, onDone }: {
     <section className="card approval-queue">
       <SectionHeader title="Pending approvals" action={<span className="count-pill">{pending.length}</span>}/>
       {pending.length ? <Queue items={pending} selected={proposal?.id}/> :
-        <EmptyState icon="shield" title="No approvals need attention" action={<a href="#/" className="button button--quiet">Go to Mission Control</a>}>
+        <EmptyState icon="shield" title="No approvals need attention" action={<a href="#/" className="button button--quiet">Go to overview</a>}>
           Requests appear here when the workflow needs a decision.
         </EmptyState>}
     </section>
     <section className="card approval-detail" aria-label="Approval details">
       {!proposal ? <EmptyState icon="file" title={selectedId ? "Approval unavailable" : "Select an approval"}>
-        {selectedId ? "This approval is no longer available in the current demo." : "Select a request to review its targets and supporting evidence."}
+        {selectedId ? "This approval is no longer available in the current sandbox run." : "Select a request to review its targets and supporting evidence."}
       </EmptyState> : <>
         <div className="approval-detail-header">
           <span className="mini-icon icon--amber"><Icon name="shield" size={22}/></span>
-          <div><h2>Simulated restart</h2><p>{proposal.targetDeviceIds.length} target devices · <a href={incidentHref(proposal.incidentId)}>Open incident</a></p></div>
+          <div><h2>Remote device restart</h2><p>{proposal.targetDeviceIds.length} target devices · <a href={incidentHref(proposal.incidentId)}>Open incident</a></p></div>
           <ApprovalBadge status={proposal.status}/>
         </div>
         <div className="approval-detail-body">
@@ -120,7 +120,7 @@ export function ApprovalCenter({ data, selectedId, role, onDecide, onDone }: {
         <div className="approval-decision">
           {proposal.status === "PENDING" && role === "approver" ? <>
             <button className="button button--primary" onClick={() => setConfirmation({ proposal, decision: "approve" })}>
-              <Icon name="check" size={17}/> Approve simulated restart
+              <Icon name="check" size={17}/> Approve remote restart
             </button>
             <button className="button button--secondary" onClick={() => setConfirmation({ proposal, decision: "reject" })}>Reject</button>
           </> : <p>{proposal.status === "PENDING" ? "A signed-in approver can record a decision." :

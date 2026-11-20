@@ -4,6 +4,7 @@ import {
   CoreError, isLegalTransition, type CohortDevice, type CoreIncident, type CoreTransition, type Sql
 } from "../../shared/contracts/core.js"
 import { assertActive } from "./generations.js"
+import { displayIdFor, jobForIncident } from "./profile.js"
 import type { Clock } from "./util.js"
 
 interface IncidentRow {
@@ -28,10 +29,13 @@ function rosterDevices(q: Sql, incidentId: string): CohortDevice[] {
 
 function toCard(q: Sql, row: IncidentRow): IncidentCard {
   const deviceCount = q.get<{ c: number }>("SELECT COUNT(*) AS c FROM incident_devices WHERE incident_id = ?", [row.id])!.c
+  const job = jobForIncident(q, row.id)
+  const detectedAt = q.get<{ t: string }>("SELECT created_at AS t FROM incidents WHERE id = ?", [row.id])?.t
   return {
     id: row.id, scenario: row.scenario, title: row.title, severity: row.severity, status: row.status,
     version: row.version, affectedMerchantCount: linkedMerchantIds(q, row.id).length,
-    affectedDeviceCount: deviceCount, updatedAt: row.updated_at
+    affectedDeviceCount: deviceCount, updatedAt: row.updated_at,
+    displayId: displayIdFor(q, row.id) ?? undefined, typeLabel: job?.typeLabel, zone: job?.zone, detectedAt, owner: row.owner
   }
 }
 
