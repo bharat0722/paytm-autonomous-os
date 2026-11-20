@@ -1,6 +1,7 @@
 // Scoped evidence reads. Only records linked to the incident are visible, and private
 // simulator behaviour is never exposed.
 import type { EvidenceView, Scope } from "../../shared/contracts/http.js"
+import { readPaymentSignals } from "./payment-confirmation.js"
 import { CORE_DEFAULTS, type Observation, type ReadRequest, type Sql } from "../../shared/contracts/core.js"
 
 const rupees = (paise: number) => Math.round(paise) / 100
@@ -9,6 +10,7 @@ type Mapper = (q: Sql, ids: string[]) => EvidenceView[]
 const ph = (n: number) => Array.from({ length: n }, () => "?").join(",")
 
 const MAPPERS: Record<EvidenceView["kind"], Mapper> = {
+  payment_signal: readPaymentSignals,
   device: (q, ids) => q.all<{ id: string; seed_ref: string; merchant_id: string; model: string; config_version: string; firmware: string; revision: number; restarted_at: string | null; mname: string }>(
     `SELECT d.id, d.seed_ref, d.merchant_id, d.model, d.config_version, d.firmware, d.revision, d.restarted_at, m.name AS mname
      FROM devices d JOIN merchants m ON m.id = d.merchant_id WHERE d.id IN (${ph(ids.length)}) ORDER BY d.seed_ref`, ids
@@ -89,7 +91,7 @@ export function readEvidence(q: Sql, scope: Scope, request: ReadRequest): Eviden
 }
 
 export function readAllEvidence(q: Sql, scope: Scope): EvidenceView[] {
-  const kinds: EvidenceView["kind"][] = ["device", "device_event", "merchant", "ticket", "payment", "settlement", "order", "pg_transaction", "webhook_attempt"]
+  const kinds: EvidenceView["kind"][] = ["device", "device_event", "merchant", "ticket", "payment", "settlement", "order", "pg_transaction", "webhook_attempt", "payment_signal"]
   return kinds.flatMap((kind) => readEvidence(q, scope, { kind, limit: CORE_DEFAULTS.evidenceReadMaxLimit }))
 }
 

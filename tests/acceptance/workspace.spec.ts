@@ -110,6 +110,32 @@ async function apiRead<T>(page: Page, origin: string, path: string): Promise<T> 
   return (await response.json()).data as T
 }
 
+test("payment intake raises an incident with readable source evidence and a human owner", async ({ browser, app }) => {
+  const operator = await openAs(browser, app, "operator")
+  const session = await apiRead<SessionView>(operator, app.origin, "/session")
+  const common = { merchantRef: "M001", orderRef: "checkout-1", amountPaise: 12500, currency: "INR", revision: 1 }
+  for (const signal of [
+    { ...common, eventId: "order-unpaid", source: "merchant-order", status: "UNPAID" },
+    { ...common, eventId: "transaction-captured", source: "gateway", status: "CAPTURED", transactionRef: "txn-1" },
+  ]) {
+    const response = await operator.request.post(app.origin + "/api/v1/demo/payment-signals", {
+      headers: { "X-CSRF-Token": session.csrfToken!, "X-Demo-Generation": String(session.generation) },
+      data: signal,
+    })
+    expect(response.status()).toBe(202)
+  }
+  app.advance(120_001)
+  await expect.poll(async () => (await apiRead<DashboardView>(operator, app.origin, "/dashboard")).incidents.length).toBe(1)
+  await operator.reload()
+  await operator.getByRole("link", { name: /Captured payment, unpaid order/ }).click()
+  await expect(operator.getByText("Assigned to Payment Gateway Integration Support")).toBeVisible()
+  await expect(operator.getByText("L1 · Exact match")).toBeVisible()
+  const evidence = operator.getByRole("region", { name: "Payment and order evidence" })
+  await expect(evidence.getByRole("button", { name: "Merchant order · UNPAID" })).toBeVisible()
+  await evidence.getByRole("button", { name: "Gateway status · CAPTURED" }).click()
+  await expect(operator.getByRole("dialog").getByText("txn-1")).toBeVisible()
+})
+
 async function reset(page: Page) {
   await mission(page)
   await page.getByRole("button", { name: "Reset sandbox", exact: true }).click()

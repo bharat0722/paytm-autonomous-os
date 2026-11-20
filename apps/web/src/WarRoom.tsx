@@ -15,7 +15,7 @@ const actionState: Record<ActionView["status"], string> = {
   PROPOSED: "Proposed", RUNNING: "Running", SUCCEEDED: "Executed", PARTIAL: "Partially executed", FAILED: "Failed", BLOCKED: "Blocked",
 }
 const evidenceKinds: Record<EvidenceView["kind"], string> = {
-  order: "Orders", pg_transaction: "Paytm transactions", webhook_attempt: "Payment alerts",
+  order: "Orders", pg_transaction: "Paytm transactions", webhook_attempt: "Payment alerts", payment_signal: "Payment observation",
   device: "Device", device_event: "Device event", ticket: "Support ticket", payment: "Payment", settlement: "Settlement", merchant: "Merchant",
 }
 const deviceCheck: Record<DeviceCheck["status"], string> = { PASS: "Passed", FAIL: "Failed", AWAITING: "Awaiting signal" }
@@ -363,6 +363,7 @@ export function WarRoom({ data, playbook, runs, deepEvidence, canResume, resumin
   const selectedId = refId ?? deepEvidence
   const selected = selectedId ? refs.get(selectedId) : undefined
   const pending = workflow.approvals.find(({ status }) => status === "PENDING")
+  const paymentConfirmation = incident.scenario === "payment-confirmation"
   const recovery = incident.scenario === "soundbox" ? workflow.recovery : null
   const ticketChecks = incident.scenario === "duplicate-tickets" ? workflow.recovery : null
   const orderChecks = incident.scenario === "order-unpaid" ? workflow.recovery : null
@@ -429,7 +430,11 @@ export function WarRoom({ data, playbook, runs, deepEvidence, canResume, resumin
           <p>{pending.targetDeviceIds.length} {pending.targetDeviceIds.length === 1 ? "device needs" : "devices need"} a remote restart before recovery can complete.</p></div>
           <a className="button button--secondary" href={approvalsHref(pending.id)} data-tip="Risky fixes wait for a person. Open the sign-off screen. Only the Approver role can decide." data-tip-pos="bottom-end">Review approval <Icon name="forward" size={15}/></a></div>}
         {!pending && (blocker || owner) && <div className="callout"><Icon name="alert"/><div><strong>{owner ? `Assigned to ${owner}` : "Investigation note"}</strong>{blocker && <p>{blocker}</p>}</div></div>}
-        {recovery ? <RecoveryProgress recovery={recovery} closed={closed}/> :
+        {paymentConfirmation ? <section className="card" aria-label="Payment and order evidence">
+          <SectionHeader title="Payment and order evidence" subtitle="Sandbox records used to route this incident"/>
+          <ul className="ref-chips">{data.evidence.filter(record => record.kind === "payment_signal").map(record =>
+            <li key={record.id}><button className="ref-chip" onClick={() => setRef(record.id)}>{record.title}</button></li>)}</ul>
+        </section> : recovery ? <RecoveryProgress recovery={recovery} closed={closed}/> :
           <section className="card outcome-placeholder"><Icon name={incident.scenario === "soundbox" ? "verify" : "stack"}/>
             <div><h2>{incident.scenario === "soundbox" ? "Awaiting verification" : incident.scenario === "order-unpaid" ? "Merchant order status" : incident.scenario === "duplicate-tickets" ? "Ticket linkage" : "Read-only settlement handoff"}</h2>
             <p>{orderChecks ? <><strong data-testid="order-check-count">{orderChecks.recovered} / {orderChecks.total} orders verified PAID</strong> · Checked <Time value={orderChecks.checkedAt}/></> : incident.scenario === "order-unpaid" ? "After the payment alert is resent, each order is read back from the merchant side." : ticketChecks ? <><strong data-testid="ticket-check-count">{ticketChecks.recovered} / {ticketChecks.total} ticket links verified</strong> · Checked <Time value={ticketChecks.checkedAt}/></> :
@@ -438,7 +443,7 @@ export function WarRoom({ data, playbook, runs, deepEvidence, canResume, resumin
           </section>}
         <FoundByJob data={data} open={setRef}/>
         <div className="overview-grid">
-          <section className="card findings">
+          {!paymentConfirmation && <section className="card findings">
             <SectionHeader title="What the AI found" subtitle="Findings from the investigator, with their supporting records"
               action={<span data-testid="ai-engine"><StatusBadge text={engineName} tone={engineTone}/></span>}/>
             {!workflow.finding ? <EmptyState icon="search" title="Findings are pending">The investigator publishes a summary when it has supporting records.</EmptyState> :
@@ -450,7 +455,7 @@ export function WarRoom({ data, playbook, runs, deepEvidence, canResume, resumin
                 <h3>Supporting records</h3>
                 <RefChips ids={workflow.finding.evidenceIds} refs={refs} open={setRef}/>
               </div>}
-          </section>
+          </section>}
           {grouping && <GroupingPanel grouping={grouping} openMerchant={setRef}/>}
         </div>
       </>}

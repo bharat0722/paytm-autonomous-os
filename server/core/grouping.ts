@@ -19,6 +19,14 @@ function loadCorrelation(q: Sql, scope: Scope): { c: Correlation; scenario: stri
   try { return { c: JSON.parse(row.correlation_json) as Correlation, scenario: row.scenario, createdAt: row.created_at } } catch { return null }
 }
 
+function evidenceKind(scenario: string): string {
+  if (scenario === "soundbox") return "device_event"
+  if (scenario === "order-unpaid") return "order"
+  if (scenario === "duplicate-tickets") return "ticket"
+  if (scenario === "payment-confirmation") return "payment_signal"
+  return "settlement"
+}
+
 const linkedIds = (q: Sql, incidentId: string, kind: string) =>
   q.all<{ record_id: string }>("SELECT record_id FROM incident_evidence WHERE incident_id = ? AND kind = ? ORDER BY record_id", [incidentId, kind]).map((r) => r.record_id)
 
@@ -31,9 +39,7 @@ export function groupingView(q: Sql, scope: Scope): GroupingView | null {
   const signals = Object.entries(c.shared ?? {}).map(([k, v]) => ({ label: SIGNAL_LABELS[k] ?? k, value: String(v) }))
   if (scenario === "duplicate-tickets") signals.push({ label: "Shared complaint", value: "Same ticket category and subject" })
   if (scenario === "settlement-discrepancy") signals.push({ label: "Shared batch", value: "Same bank settlement batch with SHORT status" })
-  const records = scenario === "soundbox" ? linkedIds(q, scope.incidentId, "device_event").length
-    : scenario === "order-unpaid" ? linkedIds(q, scope.incidentId, "order").length
-    : scenario === "duplicate-tickets" ? linkedIds(q, scope.incidentId, "ticket").length : linkedIds(q, scope.incidentId, "settlement").length
+  const records = linkedIds(q, scope.incidentId, evidenceKind(scenario)).length
 
   let outreach: GroupingView["outreach"] = null
   if (scenario === "soundbox" && merchants.length) {
@@ -65,11 +71,12 @@ export function detectionEntries(q: Sql, scope: Scope): { trace: TraceEntry; aud
   const fingerprint = g.signals.map((s) => s.value).join(" · ")
   const what = loaded.scenario === "soundbox" ? `${g.counts.records} notification failures on ${g.counts.devices} devices`
     : loaded.scenario === "order-unpaid" ? `${g.counts.records} paid orders that still show unpaid`
-    : loaded.scenario === "duplicate-tickets" ? `${g.counts.records} support tickets` : `${g.counts.records} short settlements`
+    : loaded.scenario === "duplicate-tickets" ? `${g.counts.records} support tickets`
+    : loaded.scenario === "payment-confirmation" ? `${g.counts.records} payment and order observations`
+    : `${g.counts.records} short settlements`
   const summary = `Incident detected: grouped ${what} from ${g.counts.merchants} merchants (${fingerprint}).` +
     (excludedCount ? ` ${excludedCount} unrelated record(s) kept separate.` : "")
-  const evidenceKind = loaded.scenario === "soundbox" ? "device_event" : loaded.scenario === "order-unpaid" ? "order" : loaded.scenario === "duplicate-tickets" ? "ticket" : "settlement"
-  const evidenceIds = linkedIds(q, scope.incidentId, evidenceKind).slice(0, 50)
+  const evidenceIds = linkedIds(q, scope.incidentId, evidenceKind(loaded.scenario)).slice(0, 50)
   const auditId = `aud_detect_${scope.incidentId}`
   return {
     trace: { id: `trc_detect_${scope.incidentId}`, at: loaded.createdAt, mode: "system", stage: "detection", summary, tool: "correlate_events", evidenceIds, auditId },

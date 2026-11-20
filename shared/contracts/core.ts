@@ -6,7 +6,7 @@ import type {
 } from "./http.js"
 
 export type JobKind = "workflow.investigate" | "workflow.execute" | "workflow.verify"
-  | "workflow.expire" | "core.telemetry"
+  | "workflow.expire" | "core.telemetry" | "core.payment_detect"
 export type JobInput = Scope & {
   key: string; kind: JobKind; runAfter: string; payload: Record<string, unknown>;
 }

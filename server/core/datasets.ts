@@ -115,7 +115,7 @@ export const DETECTION_JOBS: readonly DetectionJob[] = Object.freeze([
 
 export const jobById = (id: string) => DETECTION_JOBS.find((j) => j.id === id)
 export const jobByBatchKey = (key: string) => DETECTION_JOBS.find((j) => j.batchKey === key)
-export const defaultJobFor = (scenario: Scenario) => DETECTION_JOBS.find((j) => j.scenario === scenario)!
+export const defaultJobFor = (scenario: Scenario) => DETECTION_JOBS.find((j) => j.scenario === scenario)
 
 // ---------- Minimal cron evaluation (minute and hour fields) in IST ----------
 const IST_OFFSET_MS = 330 * 60_000

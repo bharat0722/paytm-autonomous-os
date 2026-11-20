@@ -100,6 +100,17 @@ export const PLAYBOOKS: Record<Scenario, PlaybookDef> = {
       close("Always ends as ESCALATED to Settlement Operations. No settlement record is changed."),
     ],
   },
+  "payment-confirmation": {
+    scenario: "payment-confirmation",
+    title: "Payment confirmation mismatch",
+    summary: "The gateway captured a payment but the merchant's order does not agree. The sandbox compares both sources, grades the mismatch and routes it to a person. It changes nothing.",
+    steps: [
+      detect("Matches the gateway and merchant-order observations for the same order and grades any mismatch."),
+      { id: "handoff", kind: "handoff", title: "Route to the right team", description: "An exact match with an overdue unpaid order goes to level 1. An amount or transaction conflict goes to a specialist.",
+        system: "Escalation queue", automation: "automatic" },
+      close("Ends with a person. No merchant order or money is changed."),
+    ],
+  },
   "duplicate-tickets": {
     scenario: "duplicate-tickets",
     title: "Duplicate support tickets",

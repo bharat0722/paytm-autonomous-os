@@ -4,7 +4,7 @@
 // identifiers are strings, dates are UTC ISO 8601 strings.
 import { z } from "zod"
 
-export type Scenario = "soundbox" | "order-unpaid" | "duplicate-tickets" | "settlement-discrepancy"
+export type Scenario = "soundbox" | "order-unpaid" | "duplicate-tickets" | "settlement-discrepancy" | "payment-confirmation"
 export type Role = "operator" | "approver"
 export type IncidentStatus =
   | "DETECTED" | "INVESTIGATING" | "INSUFFICIENT_EVIDENCE"
@@ -32,7 +32,7 @@ export interface IncidentCard {
   displayId?: string; typeLabel?: string; zone?: string; detectedAt?: string; owner?: string | null;
 }
 export interface EvidenceView {
-  id: string; kind: "device" | "device_event" | "ticket" | "payment" | "settlement" | "merchant" | "order" | "pg_transaction" | "webhook_attempt";
+  id: string; kind: "device" | "device_event" | "ticket" | "payment" | "settlement" | "merchant" | "order" | "pg_transaction" | "webhook_attempt" | "payment_signal";
   title: string; occurredAt: string | null; details: Record<string, string | number | boolean | null>;
 }
 export interface TraceEntry {
@@ -178,7 +178,8 @@ const id = z.string().min(1)
 const iso = z.string().min(1)
 const detailValue = z.union([z.string(), z.number(), z.boolean(), z.null()])
 
-export const ScenarioSchema = z.enum(["soundbox", "order-unpaid", "duplicate-tickets", "settlement-discrepancy"])
+export const DemoScenarioSchema = z.enum(["soundbox", "order-unpaid", "duplicate-tickets", "settlement-discrepancy"])
+export const ScenarioSchema = z.enum([...DemoScenarioSchema.options, "payment-confirmation"])
 export const RoleSchema = z.enum(["operator", "approver"])
 export const IncidentStatusSchema = z.enum([
   "DETECTED", "INVESTIGATING", "INSUFFICIENT_EVIDENCE", "ACTION_RUNNING", "VERIFYING",
@@ -210,7 +211,7 @@ export const IncidentCardSchema = z.object({
   detectedAt: iso.optional(), owner: z.string().nullable().optional()
 })
 export const EvidenceViewSchema = z.object({
-  id, kind: z.enum(["device", "device_event", "ticket", "payment", "settlement", "merchant", "order", "pg_transaction", "webhook_attempt"]),
+  id, kind: z.enum(["device", "device_event", "ticket", "payment", "settlement", "merchant", "order", "pg_transaction", "webhook_attempt", "payment_signal"]),
   title: z.string(), occurredAt: iso.nullable(), details: z.record(z.string(), detailValue)
 })
 export const TraceEntrySchema = z.object({
