@@ -47,11 +47,11 @@ export function IncidentList({ incidents, picker = false }: { incidents: Inciden
         <label className="search-field"><Icon name="search" size={16}/><input type="search" aria-label="Search incidents" placeholder="Search ID, type, zone…"
           value={query} onChange={(event) => setQuery(event.target.value)}/></label>
         <label className="sr-only" htmlFor="incident-status-filter">Status</label>
-        <select id="incident-status-filter" value={status} onChange={(event) => setStatus(event.target.value)}>
+        <select id="incident-status-filter" data-tip="Show only open or only closed incidents." data-tip-pos="bottom" value={status} onChange={(event) => setStatus(event.target.value)}>
           <option value="open">Open</option><option value="closed">Closed</option><option value="all">All statuses</option>
         </select>
         <label className="sr-only" htmlFor="incident-type-filter">Incident type</label>
-        <select id="incident-type-filter" value={type} onChange={(event) => setType(event.target.value)}>
+        <select id="incident-type-filter" data-tip="Show one kind of incident, such as Soundbox or settlement." data-tip-pos="bottom" value={type} onChange={(event) => setType(event.target.value)}>
           <option value="all">All types</option>{types.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
       </div>
@@ -81,7 +81,7 @@ function DetectionJobs({ data, canRun, busy, run }: {
   const [drill, setDrill] = useState(false)
   return <section className="card jobs" aria-label="Detection jobs">
     <SectionHeader title="Detection jobs" subtitle={data ? `Scheduled monitors · times in IST (${data.timezone})` : "Scheduled monitors"}
-      action={canRun && <label className="drill-toggle"><input type="checkbox" checked={drill} onChange={(e) => setDrill(e.target.checked)}/> Failure drill</label>}/>
+      action={canRun && <label className="drill-toggle" data-tip="Rehearse a failure: one item will not recover, so you can see the honest escalation." data-tip-pos="bottom-end"><input type="checkbox" checked={drill} onChange={(e) => setDrill(e.target.checked)}/> Failure drill</label>}/>
     {!data ? <p className="muted">Loading schedules…</p> : <div className="table-wrap"><table className="data-table jobs-table">
       <thead><tr><th scope="col">Job</th><th scope="col">Detects</th><th scope="col">Severity</th><th scope="col">Schedule</th><th scope="col">Last run</th><th scope="col">Next run</th>{canRun && <th scope="col"><span className="sr-only">Run</span></th>}</tr></thead>
       <tbody>{data.jobs.map((job) => <tr key={job.id}>
@@ -93,7 +93,7 @@ function DetectionJobs({ data, canRun, busy, run }: {
           <small>{job.lastRun.displayId}{job.lastRun.status && ` · ${label(job.lastRun.status)}`}</small></a> : <span className="muted">No run yet</span>}</td>
         <td><Time value={job.nextFireAt} clock/></td>
         {canRun && <td><button className="button button--quiet button--small" disabled={busy || Boolean(job.lastRun)} onClick={() => run(job, drill && job.supportsPartial)}
-          aria-label={`Run ${job.name} now`}>{job.lastRun ? "Done" : "Run now"}</button></td>}
+          aria-label={`Run ${job.name} now`} data-tip="Run this monitor now instead of waiting for its schedule. It raises an incident if it finds a problem." data-tip-pos="bottom-end">{job.lastRun ? "Done" : "Run now"}</button></td>}
       </tr>)}</tbody>
     </table></div>}
     {canRun && <p className="small-note muted">Failure drill makes one device ignore its restart so the escalation path can be rehearsed.</p>}

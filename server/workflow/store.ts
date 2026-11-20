@@ -2,12 +2,12 @@
 // change exclusively through CoreRuntime ports.
 import type { Sql } from "../../shared/contracts/core.js"
 import type {
-  ActionKind, ActionView, ApprovalStatus, AuditEntry, DeviceCheck, Finding, Mode, Scope, TraceEntry,
+  ActionKind, ActionView, ApprovalStatus, AuditEntry, DeviceCheck, EntryKind, EntryOutcome, Finding, Mode, ProcessEntry, Scope, TraceEntry,
 } from "../../shared/contracts/http.js"
 import { opaqueId, parseJson } from "./util.js"
 
 export type Phase =
-  | "TRIAGE" | "SYNC" | "RESTART_PROPOSAL" | "AWAITING_APPROVAL" | "RESTART" | "LINKING" | "DONE"
+  | "TRIAGE" | "SYNC" | "RESTART_PROPOSAL" | "AWAITING_APPROVAL" | "RESTART" | "LINKING" | "RESEND" | "DONE"
 
 export interface StateRow {
   generation: number; incident_id: string; scenario: string; phase: Phase; version: number;
@@ -238,3 +238,45 @@ export function addEscalation(
 }
 
 export type { ApprovalStatus }
+
+
+// ---------------------------------------------------------------------------
+// Process log: what each playbook step hit, what it sent and what came back (idempotent by op_key)
+// ---------------------------------------------------------------------------
+const MAX_JSON = 6000
+function capJson(value: unknown): string {
+  const text = JSON.stringify(value === undefined ? null : value)
+  return text.length <= MAX_JSON ? text : JSON.stringify({ _truncated: true, preview: text.slice(0, MAX_JSON) })
+}
+
+export interface ProcessLogInput {
+  at: string; stepId: string; kind: EntryKind; system: string; method: string; endpoint: string
+  request: unknown; response: unknown; httpStatus?: number | null; outcome: EntryOutcome; summary: string
+  evidenceIds?: string[]; actionId?: string | null
+}
+export function addProcessLog(tx: Sql, scope: Scope, opKey: string, e: ProcessLogInput): string {
+  const id = opaqueId("plg", scope.generation, scope.incidentId, opKey)
+  tx.run(
+    `INSERT OR IGNORE INTO wf_process_log (id, generation, incident_id, op_key, at, step_id, kind, system, method, endpoint, request, response,
+       http_status, outcome, summary, evidence_ids, action_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, scope.generation, scope.incidentId, opKey, e.at, e.stepId, e.kind, e.system, e.method, e.endpoint, capJson(e.request), capJson(e.response),
+      e.httpStatus ?? null, e.outcome, e.summary.slice(0, 500), JSON.stringify(e.evidenceIds ?? []), e.actionId ?? null],
+  )
+  return id
+}
+
+interface ProcessRow {
+  id: string; at: string; step_id: string; kind: EntryKind; system: string; method: string; endpoint: string; request: string; response: string;
+  http_status: number | null; outcome: EntryOutcome; summary: string; evidence_ids: string; action_id: string | null
+}
+export function listProcessLog(q: Sql, scope: Scope): ProcessEntry[] {
+  return q.all<ProcessRow>(
+    "SELECT * FROM wf_process_log WHERE generation = ? AND incident_id = ? ORDER BY at, rowid",
+    [scope.generation, scope.incidentId],
+  ).map((r) => ({
+    id: r.id, at: r.at, stepId: r.step_id, kind: r.kind, system: r.system, method: r.method, endpoint: r.endpoint,
+    request: parseJson<unknown>(r.request, null), response: parseJson<unknown>(r.response, null), httpStatus: r.http_status,
+    outcome: r.outcome, summary: r.summary, evidenceIds: parseJson<string[]>(r.evidence_ids, []), actionId: r.action_id,
+  }))
+}

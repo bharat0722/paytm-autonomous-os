@@ -28,7 +28,17 @@ export const PRIVATE_FIXTURE = Object.freeze({
   otherConfigRefs: ["D-M050-1", "D-M051-1"],
   soundboxTicketMerchants: ["M002", "M004", "M005", "M008", "M011", "M013", "M016", "M019", "M021"],
   duplicateTicketPlan: { M040: 3, M041: 2, M042: 3, M043: 2, M044: 2, M045: 2 } as Record<string, number>,
-  shortSettlementMerchants: range(60, 67).map(ref)
+  shortSettlementMerchants: range(60, 67).map(ref),
+  // Payment Gateway scenario: four paid orders whose webhook failed (merchants M080-M082).
+  orderCohort: [
+    { merchant: "M080", ref: "ORD-1001", rupees: 1240 },
+    { merchant: "M080", ref: "ORD-1002", rupees: 560 },
+    { merchant: "M081", ref: "ORD-2001", rupees: 2100 },
+    { merchant: "M082", ref: "ORD-3001", rupees: 899 },
+  ],
+  // In the `partial` variant this merchant endpoint still rejects a resent webhook.
+  orderPartialFailRef: "ORD-3001",
+  orderTicketMerchants: ["M080", "M081", "M082"],
 })
 
 const SHOP = ["Kirana", "Medical", "General Store", "Sweets", "Mobile Shop", "Dairy", "Bakery", "Hardware", "Tea Stall", "Stationery"]

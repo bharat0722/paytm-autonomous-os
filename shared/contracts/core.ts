@@ -21,6 +21,8 @@ export interface Sql {
 export interface CohortDevice { id: string; merchantId: string; revision: string }
 export interface CoreIncident {
   card: IncidentCard; devices: CohortDevice[]; blocker: string | null; owner: string | null;
+  /** How the incident was grouped (rule, window, excluded decoys). Optional: not every core provides it. */
+  correlation?: Record<string, unknown>;
 }
 export interface CoreTransition {
   expectedVersion: number; status: IncidentStatus; blocker: string | null; owner: string | null;

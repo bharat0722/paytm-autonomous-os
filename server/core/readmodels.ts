@@ -73,6 +73,7 @@ export function dashboardView(q: Sql, workflow: WorkflowModule | null, generatio
       { key: "open_tickets", label: "Open support tickets", count: count("SELECT COUNT(*) AS c FROM tickets WHERE generation = ? AND status = 'OPEN'") },
       { key: "successful_payments", label: "Successful payments", count: count("SELECT COUNT(*) AS c FROM payments WHERE generation = ? AND status = 'SUCCESS'") },
       { key: "short_settlements", label: "Short settlements", count: count("SELECT COUNT(*) AS c FROM settlements WHERE generation = ? AND status = 'SHORT'") },
+      { key: "unpaid_orders", label: "Orders unpaid at merchant", count: count("SELECT COUNT(*) AS c FROM orders WHERE generation = ? AND merchant_status = 'UNPAID'") },
       { key: "devices", label: "Soundbox devices", count: count("SELECT COUNT(*) AS c FROM devices WHERE generation = ?") }
     ],
     incidents: cards,

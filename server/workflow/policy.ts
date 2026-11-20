@@ -9,6 +9,7 @@ export const RULES = {
   SYNC: "MOCK_SYNC_ELIGIBLE_COHORT",
   RESTART: "DEVICE_RESTART_REQUIRES_APPROVAL",
   LINK: "LINK_ELIGIBLE_DUPLICATE_TICKETS",
+  RESEND: "RESEND_ELIGIBLE_WEBHOOKS",
   SETTLEMENT: "SETTLEMENT_READ_ONLY_HANDOFF",
   DENY: "DENY_BY_DEFAULT",
   NO_FINANCIAL: "NO_FINANCIAL_MUTATION",
@@ -20,6 +21,7 @@ export type ActionRequest =
   | { kind: "MOCK_SYNC_DEVICE_CONFIG"; targetIds: string[] }
   | { kind: "MOCK_RESTART_DEVICE"; targetIds: string[] }
   | { kind: "LINK_SUPPORT_TICKETS"; primaryTicketId?: string; duplicateTicketIds?: string[]; groups?: LinkGroup[] }
+  | { kind: "RESEND_WEBHOOK"; targetIds: string[] }
   | { kind: string; targetIds?: string[] }
 
 /** One merchant's duplicate set: the primary stays open, duplicates link to it. */
@@ -110,6 +112,27 @@ export function evaluateAction(ctx: PolicyContext, request: ActionRequest): Poli
       const unread = targets.filter((id) => !deviceEvidenceFor(ctx.retrieved, id))
       if (unread.length) return deny(RULES.RESTART, `Device records were not read in this run for: ${unread.join(", ")}.`, targets)
       return { allowed: true, requiresApproval: true, ruleId: RULES.RESTART, reason: "Restart of unresolved verified devices requires human approval.", targetIds: targets }
+    }
+    case "RESEND_WEBHOOK": {
+      const r = request as { targetIds: string[] }
+      const targets = sortedUnique(r.targetIds ?? [])
+      if (scenario !== "order-unpaid") return deny(RULES.DENY, "Webhook resend applies only to the unpaid-order incident.", targets)
+      if (status !== "INVESTIGATING") return deny(RULES.DENY, `Webhook resend is not eligible while the incident is ${status}.`, targets)
+      if (targets.length === 0) return deny(RULES.RESEND, "No targets supplied.", targets)
+      for (const id of targets) {
+        const order = ctx.retrieved.get(id)
+        if (!order || order.kind !== "order") return deny(RULES.RESEND, `Order ${id} was not read in this run.`, targets)
+        if (order.details.merchantStatus !== "UNPAID") return deny(RULES.RESEND, `Order ${String(order.details.orderRef ?? id)} is ${String(order.details.merchantStatus)} at the merchant, not UNPAID.`, targets)
+        const txn = [...ctx.retrieved.values()].find((e) => e.kind === "pg_transaction" && e.details.orderId === id)
+        if (!txn) return deny(RULES.RESEND, `The Transaction Status API was not checked for order ${String(order.details.orderRef ?? id)} in this run.`, targets)
+        if (txn.details.pgStatus !== "TXN_SUCCESS") return deny(RULES.RESEND, `Status API reports ${String(txn.details.pgStatus)} for order ${String(order.details.orderRef ?? id)}; a webhook is only sent for a final status.`, targets)
+        const attempts = [...ctx.retrieved.values()].filter((e) => e.kind === "webhook_attempt" && e.details.orderId === id)
+          .sort((a, b) => Number(a.details.attemptNo ?? 0) - Number(b.details.attemptNo ?? 0))
+        const last = attempts[attempts.length - 1]
+        if (!last) return deny(RULES.RESEND, `The webhook log for order ${String(order.details.orderRef ?? id)} was not read in this run.`, targets)
+        if (last.details.httpStatus === 200) return deny(RULES.RESEND, `The last webhook for order ${String(order.details.orderRef ?? id)} was already delivered (HTTP 200); resending would not help.`, targets)
+      }
+      return { allowed: true, requiresApproval: false, ruleId: RULES.RESEND, reason: "Status API confirmed TXN_SUCCESS, the order is unpaid at the merchant and the last webhook failed. Resend is idempotent and moves no money.", targetIds: targets }
     }
     case "LINK_SUPPORT_TICKETS": {
       const groups = linkGroupsOf(request as { primaryTicketId?: string; duplicateTicketIds?: string[]; groups?: LinkGroup[] })

@@ -51,6 +51,7 @@ export function scriptedStep(state: ToolState, stage: Stage): Step {
   const scenario = state.incident.card.scenario
   if (scenario === "soundbox") return stage === "triage" ? soundboxTriage(state) : soundboxContinuation(state)
   if (scenario === "duplicate-tickets") return duplicateTickets(state)
+  if (scenario === "order-unpaid") return orderUnpaid(state)
   return settlement(state)
 }
 
@@ -177,21 +178,75 @@ function settlement(state: ToolState): Step {
   if (!state.used.has("read_merchants")) return tool("read_merchants", { limit: 20 })
   const settlements = byKind(state, "settlement")
   const tickets = byKind(state, "ticket")
-  const facts = settlements.slice(0, 3).map((s) => {
-    const pairs = Object.entries(s.details).filter(([, v]) => typeof v !== "string" || v.length <= 60).slice(0, 8)
-    return `${s.id}: ${pairs.map(([k, v]) => `${k}=${String(v)}`).join(", ")}`
-  })
+  const short = settlements.filter((s) => Number(s.details.shortfallRupees ?? s.details.differenceInr ?? 0) > 0)
+  const total = short.reduce((sum, s) => sum + Number(s.details.shortfallRupees ?? s.details.differenceInr ?? 0), 0)
+  const amounts = short.map((s) => Number(s.details.shortfallRupees ?? s.details.differenceInr ?? 0))
+  const batchRef = short[0]?.details.bankRef ?? short[0]?.details.batchRef
+  const onBatch = batchRef ? `on bank batch ${String(batchRef)}` : "on one bank batch"
+  const who = `${short.length} merchant${short.length === 1 ? " was" : "s were"}`
+  const inr = (n: number) => `\u20b9${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(n)}`
+  const range = amounts.length && Math.min(...amounts) !== Math.max(...amounts) ? `${inr(Math.min(...amounts))} to ${inr(Math.max(...amounts))} each` : `${inr(amounts[0] ?? 0)} each`
+  const plain = `${who} paid less than expected ${onBatch}: ${inr(total)} short in total (${range}). Evidence is attached. No settlement record was changed.`
   if (settlements.length && !state.proposal && !proposalDenied(state, "record_settlement_handoff")) {
     return tool("record_settlement_handoff", {
-      summary: `Settlement records (read-only): ${facts.join(" | ")}. Linked complaints: ${tickets.map((t) => t.id).join(", ") || "none"}. No settlement change was made.`,
+      summary: plain,
       evidenceIds: [...settlements.map((s) => s.id), ...tickets.map((t) => t.id)].slice(0, 50),
     })
   }
   return finding({
-    observations: [`Read ${settlements.length} settlement records and ${tickets.length} linked complaints.`, ...facts.map((f) => `Settlement ${f}.`)],
+    observations: [
+      `${short.length} of ${settlements.length} settlements were paid less than expected ${onBatch}.`,
+      `Total shortfall: ${inr(total)} (${range}).`,
+      `${tickets.length} merchant complaints are linked to this batch.`,
+    ],
     hypothesis: null,
     evidenceIds: [...settlements.map((s) => s.id), ...tickets.map((t) => t.id)].slice(0, 50),
-    uncertainty: "Settlement discrepancies require a human settlement owner; no financial action is available.",
+    uncertainty: "The cause is not known. A person in Settlement Operations must investigate; the AI cannot change money.",
     missingEvidence: settlements.length ? [] : ["No linked settlement record was found."],
+  })
+}
+
+function orderUnpaid(state: ToolState): Step {
+  if (!state.used.has("get_incident")) return tool("get_incident")
+  if (!state.used.has("read_orders")) return tool("read_orders", { limit: 50 })
+  if (!state.used.has("read_webhook_log")) return tool("read_webhook_log", { limit: 100 })
+  if (!state.used.has("check_pg_status")) return tool("check_pg_status", { limit: 50 })
+  if (!state.used.has("read_merchants")) return tool("read_merchants", { limit: 50 })
+  if (!state.used.has("read_tickets")) return tool("read_tickets", { limit: 50 })
+
+  const orders = byKind(state, "order")
+  const txns = byKind(state, "pg_transaction")
+  const attempts = byKind(state, "webhook_attempt")
+  const eligible = orders.filter((o) => {
+    const txn = txns.find((t) => t.details.orderId === o.id)
+    const mine = attempts.filter((a) => a.details.orderId === o.id).sort((a, b) => Number(a.details.attemptNo ?? 0) - Number(b.details.attemptNo ?? 0))
+    const last = mine[mine.length - 1]
+    return o.details.merchantStatus === "UNPAID" && txn?.details.pgStatus === "TXN_SUCCESS" && last && last.details.httpStatus !== 200
+  })
+  if (eligible.length && !state.proposal && !proposalDenied(state, "propose_webhook_resend")) {
+    const cite = [...eligible.map((o) => o.id), ...eligible.flatMap((o) => txns.filter((t) => t.details.orderId === o.id).map((t) => t.id)),
+      ...eligible.flatMap((o) => attempts.filter((a) => a.details.orderId === o.id).map((a) => a.id))]
+    return tool("propose_webhook_resend", {
+      orderIds: eligible.map((o) => o.id),
+      rationale: `${eligible.length} orders are UNPAID at the merchant while the Transaction Status API reports TXN_SUCCESS and the last webhook failed; resending the webhook is the policy-allowed fix.`,
+      evidenceIds: cite,
+    })
+  }
+  const statuses = new Map<string, number>()
+  for (const t of txns) statuses.set(String(t.details.pgStatus), (statuses.get(String(t.details.pgStatus)) ?? 0) + 1)
+  const codes = new Map<string, number>()
+  for (const a of attempts) codes.set(String(a.details.httpStatus), (codes.get(String(a.details.httpStatus)) ?? 0) + 1)
+  return finding({
+    observations: [
+      `${eligible.length} of ${orders.length} orders are paid at Paytm but still unpaid at the merchant.`,
+      `Paytm's status check: ${[...statuses.entries()].map(([k, v]) => `${k} ×${v}`).join(", ") || "no results"}.`,
+      `Payment alerts to the merchants failed with HTTP ${[...codes.keys()].join(", ") || "n/a"}.`,
+    ],
+    hypothesis: state.proposal
+      ? "Paytm collected the payments but the merchants' endpoints rejected the success webhook, so the merchants never marked the orders paid. Resending the webhook is proposed; the verifier will check each merchant order."
+      : null,
+    evidenceIds: [...eligible.map((o) => o.id), ...txns.slice(0, 6).map((t) => t.id), ...attempts.slice(0, 6).map((a) => a.id)],
+    uncertainty: "The failing merchant endpoint is the leading hypothesis, not proven. An order is fixed only when the verifier reads it back as PAID.",
+    missingEvidence: state.proposal ? [] : ["No order met the resend policy."],
   })
 }

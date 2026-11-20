@@ -131,7 +131,7 @@ export const modes: Record<Mode, [string, Tone]> = {
 }
 
 export const scenarios: Record<Scenario, string> = {
-  soundbox: "Soundbox", "duplicate-tickets": "Duplicate tickets", "settlement-discrepancy": "Settlement discrepancy",
+  soundbox: "Soundbox", "order-unpaid": "Paid order shows unpaid", "duplicate-tickets": "Duplicate tickets", "settlement-discrepancy": "Settlement discrepancy",
 }
 
 export function isActive(status: IncidentStatus): boolean {
@@ -160,3 +160,5 @@ export function traceSummary(summary: string): string {
 }
 
 export const number = new Intl.NumberFormat("en-IN")
+
+export const rupees = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2, minimumFractionDigits: 0 })

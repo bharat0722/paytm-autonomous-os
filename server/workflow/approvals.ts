@@ -4,7 +4,7 @@ import type { CoreIncident, CoreRuntime, Job, Sql } from "../../shared/contracts
 import type { Actor, ApprovalDecision, ApprovalStatus, ApprovalView, DecisionResult, Scope } from "../../shared/contracts/http.js"
 import { FIELD_OWNER, transition } from "./machine.js"
 import { canDecideApproval } from "./policy.js"
-import { addAudit, addEscalation, saveState } from "./store.js"
+import { addAudit, addEscalation, addProcessLog, saveState } from "./store.js"
 import { FencedError, WorkflowError, addMs, assertActiveGeneration, guardJob, opaqueId, parseJson, scopeOf, sha256, stableJson } from "./util.js"
 
 export interface ApprovalRow {
@@ -162,6 +162,13 @@ export function decideApproval(
         opKey: `approval:${row.id}:approved`, auditId,
       })
       saveState(tx, scope, now, { scenario: incident.card.scenario, phase: "RESTART" })
+      addProcessLog(tx, scope, `approval:${row.id}:decided`, {
+        at: now, stepId: "approve", kind: "decision", system: "Approval Center", method: "DECIDE", endpoint: `/approvals/${row.id}/decision`,
+        request: { decision: "approve", proposalRevision: row.proposal_revision, by: actor.role, reason },
+        response: { status: "APPROVED", targets: targets.length, singleUse: true, expiresAt: row.expires_at },
+        httpStatus: 200, outcome: "OK", summary: `Approved by the ${actor.role} for exactly ${targets.length} devices. The restart is queued once.`,
+        actionId: row.action_id, evidenceIds: parseJson<string[]>(row.evidence_ids, []),
+      })
       core.jobs.enqueue(tx, {
         generation, incidentId: row.incident_id, key: `execute:${row.action_id}`, kind: "workflow.execute",
         runAfter: now, payload: { actionId: row.action_id, approvalId: row.id },
@@ -179,6 +186,12 @@ export function decideApproval(
         opKey: `approval:${row.id}:rejected`, auditId,
       })
       saveState(tx, scope, now, { scenario: incident.card.scenario, phase: "DONE", blockerCode: "APPROVAL_REJECTED" })
+      addProcessLog(tx, scope, `approval:${row.id}:decided`, {
+        at: now, stepId: "approve", kind: "decision", system: "Approval Center", method: "DECIDE", endpoint: `/approvals/${row.id}/decision`,
+        request: { decision: "reject", proposalRevision: row.proposal_revision, by: actor.role, reason },
+        response: { status: "REJECTED", executed: false }, httpStatus: 200, outcome: "BLOCKED",
+        summary: `Rejected by the ${actor.role}. The restart will never run.`, actionId: row.action_id,
+      })
     }
     return { generation, approval: approvalView(getApproval(tx, row.id)!, now), queued: body.decision === "approve" }
   })
@@ -199,6 +212,11 @@ function expireApprovalTx(core: CoreRuntime, tx: Sql, row: ApprovalRow): boolean
   const auditId = addAudit(tx, scope, `approval:${row.id}:expired`, {
     at: now, actor: "system:expiry", event: "APPROVAL_EXPIRED", summary: `Approval expired at ${row.expires_at} without a decision.`,
     actionId: row.action_id, approvalId: row.id,
+  })
+  addProcessLog(tx, scope, `approval:${row.id}:expired`, {
+    at: now, stepId: "approve", kind: "decision", system: "Approval Center", method: "EXPIRE", endpoint: `/approvals/${row.id}`,
+    request: { expiresAt: row.expires_at }, response: { status: "EXPIRED", executed: false }, httpStatus: null, outcome: "BLOCKED",
+    summary: "No one decided before the approval expired. The restart will never run.", actionId: row.action_id,
   })
   const incident = core.incidents.get(tx, scope)
   if (incident?.card.status === "APPROVAL_PENDING") {

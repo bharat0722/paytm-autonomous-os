@@ -37,7 +37,7 @@ export function createWorkflowWith(core: CoreRuntime, options: WorkflowOptions):
     },
     getIncidentWorkflow: (q, scope) => getIncidentWorkflow(core, q, scope),
     countPendingApprovals: (q, generation) => countPendingApprovals(core, q, generation),
-    registerRoutes: (router, requireRole) => registerWorkflowRoutes(core, router, requireRole),
+    registerRoutes: (router, requireRole) => registerWorkflowRoutes(core, router, requireRole, options),
   }
 }
 

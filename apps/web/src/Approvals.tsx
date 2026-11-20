@@ -119,10 +119,10 @@ export function ApprovalCenter({ data, selectedId, role, onDecide, onDone }: {
         </div>
         <div className="approval-decision">
           {proposal.status === "PENDING" && role === "approver" ? <>
-            <button className="button button--primary" onClick={() => setConfirmation({ proposal, decision: "approve" })}>
+            <button className="button button--primary" data-tip="Say yes. The restart runs once, on exactly these devices." onClick={() => setConfirmation({ proposal, decision: "approve" })}>
               <Icon name="check" size={17}/> Approve remote restart
             </button>
-            <button className="button button--secondary" onClick={() => setConfirmation({ proposal, decision: "reject" })}>Reject</button>
+            <button className="button button--secondary" data-tip="Say no. Nothing runs and the case goes to a person." onClick={() => setConfirmation({ proposal, decision: "reject" })}>Reject</button>
           </> : <p>{proposal.status === "PENDING" ? "A signed-in approver can record a decision." :
             proposal.status === "APPROVED" || proposal.status === "CONSUMED" ? "Follow the incident to see execution and verification." :
               "This request is closed. Follow the incident for next steps."}</p>}

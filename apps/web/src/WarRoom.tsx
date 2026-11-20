@@ -1,17 +1,21 @@
+import { ProcessPlaybook } from "./Playbook.js"
+import { RunsPanel } from "./Runs.js"
 import { useMemo, useState } from "react"
 import type {
-  ActionView, AuditEntry, DeviceCheck, EvidenceView, GroupingView, IncidentView, RecoveryView, TraceEntry,
+  ActionView, AuditEntry, DeviceCheck, EvidenceView, GroupingView, IncidentView, PlaybookView, RecoveryView, RunsView, TraceEntry,
 } from "../../../shared/contracts/http.js"
-import { CopyId, Dialog, EmptyState, Icon, IncidentBadge, SectionHeader, StatusBadge, Time } from "./ui.js"
+import { CopyId, Dialog, EmptyState, Icon, IncidentBadge, Info, SectionHeader, StatusBadge, Time } from "./ui.js"
 import { approvalPresentation, approvalsHref, incidentHref, incidentPresentation, label, modes, number, scenarios, traceSummary } from "./workspace.js"
 
 const actionTitle: Record<ActionView["kind"], string> = {
   MOCK_SYNC_DEVICE_CONFIG: "Configuration sync", MOCK_RESTART_DEVICE: "Remote device restart", LINK_SUPPORT_TICKETS: "Link support tickets",
+  RESEND_WEBHOOK: "Resend payment alert",
 }
 const actionState: Record<ActionView["status"], string> = {
   PROPOSED: "Proposed", RUNNING: "Running", SUCCEEDED: "Executed", PARTIAL: "Partially executed", FAILED: "Failed", BLOCKED: "Blocked",
 }
 const evidenceKinds: Record<EvidenceView["kind"], string> = {
+  order: "Orders", pg_transaction: "Paytm transactions", webhook_attempt: "Payment alerts",
   device: "Device", device_event: "Device event", ticket: "Support ticket", payment: "Payment", settlement: "Settlement", merchant: "Merchant",
 }
 const deviceCheck: Record<DeviceCheck["status"], string> = { PASS: "Passed", FAIL: "Failed", AWAITING: "Awaiting signal" }
@@ -27,7 +31,7 @@ type Ref = {
   id: string; kind: string; title: string; at: string | null
   facts: [string, string][]; record?: EvidenceView
 }
-type Tab = "overview" | "evidence" | "investigation" | "actions" | "audit"
+type Tab = "overview" | "evidence" | "investigation" | "jobs" | "actions" | "audit"
 
 function useReferences(data: IncidentView): Map<string, Ref> {
   return useMemo(() => {
@@ -139,6 +143,30 @@ function MerchantRecords({ merchantId, records, open }: { merchantId: string; re
     <ul className="record-list">{related.map((r) => <li key={r.id}><button onClick={() => open(r.id)}>
       <Icon name="file" size={16}/><span><strong>{r.title}</strong><small>{evidenceKinds[r.kind]}{r.occurredAt ? " · " : ""}{r.occurredAt && <Time value={r.occurredAt}/>}</small></span><Icon name="chevron" size={15}/>
     </button></li>)}</ul></div>
+}
+
+/** Which job found what: record counts by type and the tickets involved, in plain words. */
+function FoundByJob({ data, open }: { data: IncidentView; open: (id: string) => void }) {
+  const [all, setAll] = useState(false)
+  const { profile, evidence } = data
+  const names = new Map(evidence.filter((e) => e.kind === "merchant").map((e) => [e.id, e.title]))
+  const counts = new Map<string, number>()
+  for (const e of evidence) counts.set(e.kind, (counts.get(e.kind) ?? 0) + 1)
+  const words: Record<string, string> = { ticket: "tickets", settlement: "settlements", merchant: "merchants", device: "devices", device_event: "device events", payment: "payments", order: "orders", pg_transaction: "Paytm transactions", webhook_attempt: "payment alerts" }
+  const tickets = evidence.filter((e) => e.kind === "ticket")
+  const shown = all ? tickets : tickets.slice(0, 5)
+  if (!profile) return null
+  return <section className="card found-by">
+    <SectionHeader title={`What ${profile.detectedBy.jobName} found`} subtitle={`Job ID ${profile.detectedBy.jobId}`}
+      action={<Info text="The monitor ran on its schedule, grouped related records and opened this incident."/>}/>
+    <p className="found-counts">{[...counts].filter(([k]) => words[k]).map(([k, n]) => `${n} ${words[k]}`).join(" · ")}</p>
+    {tickets.length > 0 ? <div className="table-wrap"><table><thead><tr><th scope="col">Ticket</th><th scope="col">Merchant</th><th scope="col">What they reported</th><th scope="col">Status</th></tr></thead>
+      <tbody>{shown.map((e) => <tr key={e.id}>
+        <td><button className="text-button record-link" onClick={() => open(e.id)}><code>{e.id}</code></button></td>
+        <td>{names.get(String(e.details.merchantId)) ?? "—"}</td><td>{e.title}</td><td>{String(e.details.status ?? "—")}</td></tr>)}</tbody></table>
+      {tickets.length > 5 && <button className="text-button" onClick={() => setAll(!all)}>{all ? "Show fewer tickets" : `Show all ${tickets.length} tickets`}</button>}</div>
+      : <p className="muted">No support tickets are linked to this incident.</p>}
+  </section>
 }
 
 function aiEngine(trace: TraceEntry[]): [string, "green" | "amber" | "neutral"] {
@@ -271,8 +299,8 @@ function AuditTab({ entries, refs, open }: { entries: AuditEntry[]; refs: Map<st
   </section>
 }
 
-export function WarRoom({ data, deepEvidence, canResume, resuming, resume }: {
-  data: IncidentView; deepEvidence?: string; canResume: boolean; resuming: boolean; resume: () => void
+export function WarRoom({ data, playbook, runs, deepEvidence, canResume, resuming, resume }: {
+  data: IncidentView; playbook?: PlaybookView; runs?: RunsView; deepEvidence?: string; canResume: boolean; resuming: boolean; resume: () => void
 }) {
   const { incident, blocker, owner, workflow, grouping, profile } = data
   const refs = useReferences(data)
@@ -284,9 +312,11 @@ export function WarRoom({ data, deepEvidence, canResume, resuming, resume }: {
   const pending = workflow.approvals.find(({ status }) => status === "PENDING")
   const recovery = incident.scenario === "soundbox" ? workflow.recovery : null
   const ticketChecks = incident.scenario === "duplicate-tickets" ? workflow.recovery : null
-  const inconsistent = incident.status === "RESOLVED" && (!recovery || recovery.total === 0 ||
-    recovery.recovered !== recovery.total || recovery.remainingDeviceIds.length > 0 ||
-    recovery.devices.length !== recovery.total || recovery.devices.some(({ status }) => status !== "PASS"))
+  const orderChecks = incident.scenario === "order-unpaid" ? workflow.recovery : null
+  const proof = recovery ?? orderChecks
+  const inconsistent = incident.status === "RESOLVED" && (!proof || proof.total === 0 ||
+    proof.recovered !== proof.total || proof.remainingDeviceIds.length > 0 ||
+    proof.devices.length !== proof.total || proof.devices.some(({ status }) => status !== "PASS"))
   const closed = incident.status === "RESOLVED" && !inconsistent
 
   function closeSheet() {
@@ -297,7 +327,8 @@ export function WarRoom({ data, deepEvidence, canResume, resuming, resume }: {
   const tabs: [Tab, string, number | null][] = [
     ["overview", "Overview", null],
     ["evidence", "Evidence", data.evidence.length + data.signals.length],
-    ["investigation", "Investigation", workflow.trace.length],
+    ["investigation", "Process", playbook ? playbook.steps.reduce((n, s) => n + s.entries.length, 0) : null],
+    ["jobs", "Jobs and runs", runs ? runs.jobs.length : null],
     ["actions", "Actions & approvals", workflow.actions.length + workflow.approvals.length],
     ["audit", "Audit log", workflow.audit.length],
   ]
@@ -322,7 +353,7 @@ export function WarRoom({ data, deepEvidence, canResume, resuming, resume }: {
       </div>
       {profile && <p className="incident-description">{profile.description}</p>}
       <dl className="incident-facts">
-        {profile && <div><dt>Detected by</dt><dd>{profile.detectedBy.jobName}<small><code>{profile.detectedBy.cron}</code> · {profile.detectedBy.scheduleLabel}</small></dd></div>}
+        {profile && <div><dt>Detected by job</dt><dd data-tip="The scheduled monitor that found this problem." data-tip-pos="bottom">{profile.detectedBy.jobName}<small>Job ID <code>{profile.detectedBy.jobId}</code></small><small><code>{profile.detectedBy.cron}</code> · {profile.detectedBy.scheduleLabel}</small></dd></div>}
         <div><dt>Detected at</dt><dd>{profile ? <Time value={profile.detectedBy.ranAt}/> : incident.detectedAt ? <Time value={incident.detectedAt}/> : "—"}</dd></div>
         {profile && <div><dt>Threshold</dt><dd>{profile.threshold}</dd></div>}
         <div><dt>Impact</dt><dd>{number.format(incident.affectedMerchantCount)} merchants{incident.affectedDeviceCount > 0 && <small>{number.format(incident.affectedDeviceCount)} devices</small>}</dd></div>
@@ -345,11 +376,12 @@ export function WarRoom({ data, deepEvidence, canResume, resuming, resume }: {
         {!pending && (blocker || owner) && <div className="callout"><Icon name="alert"/><div><strong>{owner ? `Assigned to ${owner}` : "Investigation note"}</strong>{blocker && <p>{blocker}</p>}</div></div>}
         {recovery ? <RecoveryProgress recovery={recovery} closed={closed}/> :
           <section className="card outcome-placeholder"><Icon name={incident.scenario === "soundbox" ? "verify" : "stack"}/>
-            <div><h2>{incident.scenario === "soundbox" ? "Awaiting verification" : incident.scenario === "duplicate-tickets" ? "Ticket linkage" : "Read-only settlement handoff"}</h2>
-            <p>{ticketChecks ? <><strong data-testid="ticket-check-count">{ticketChecks.recovered} / {ticketChecks.total} ticket links verified</strong> · Checked <Time value={ticketChecks.checkedAt}/></> :
+            <div><h2>{incident.scenario === "soundbox" ? "Awaiting verification" : incident.scenario === "order-unpaid" ? "Merchant order status" : incident.scenario === "duplicate-tickets" ? "Ticket linkage" : "Read-only settlement handoff"}</h2>
+            <p>{orderChecks ? <><strong data-testid="order-check-count">{orderChecks.recovered} / {orderChecks.total} orders verified PAID</strong> · Checked <Time value={orderChecks.checkedAt}/></> : incident.scenario === "order-unpaid" ? "After the payment alert is resent, each order is read back from the merchant side." : ticketChecks ? <><strong data-testid="ticket-check-count">{ticketChecks.recovered} / {ticketChecks.total} ticket links verified</strong> · Checked <Time value={ticketChecks.checkedAt}/></> :
               incident.scenario === "soundbox" ? "Recovery appears after the first completed device check." :
                 incident.scenario === "duplicate-tickets" ? "Links saved between support tickets are verified after they are written." : "The discrepancy is recorded and assigned to a person for review. No money is moved."}</p></div>
           </section>}
+        <FoundByJob data={data} open={setRef}/>
         <div className="overview-grid">
           <section className="card findings">
             <SectionHeader title="What the AI found" subtitle="Findings from the investigator, with their supporting records"
@@ -368,7 +400,11 @@ export function WarRoom({ data, deepEvidence, canResume, resuming, resume }: {
         </div>
       </>}
       {tab === "evidence" && <EvidenceTab data={data} refs={refs} open={setRef}/>}
-      {tab === "investigation" && <InvestigationTab entries={workflow.trace} refs={refs} open={setRef}/>}
+      {tab === "investigation" && <div className="section-stack">
+        {playbook ? <ProcessPlaybook view={playbook} openEvidence={setRef}/> : <div className="card"><EmptyState icon="list" title="Loading the process…">The steps appear here.</EmptyState></div>}
+        <details className="card tech-trace"><summary>Technical AI trace ({workflow.trace.length} entries)</summary><InvestigationTab entries={workflow.trace} refs={refs} open={setRef}/></details>
+      </div>}
+      {tab === "jobs" && <RunsPanel view={runs}/>}
       {tab === "actions" && <ActionsTab data={data} refs={refs} open={setRef} closed={closed}/>}
       {tab === "audit" && <AuditTab entries={workflow.audit} refs={refs} open={setRef}/>}
     </div>

@@ -33,3 +33,19 @@ The browser suite covers three clean success runs with distinct browser sessions
 The product branch passed its TypeScript check and production build. The core, workflow and isolated web suites passed 27, 55 and 8 tests respectively. All 9 Playwright tests passed in Chromium. The browser rehearsed three complete Soundbox runs through 20 / 24 and paused for an exact four-device approval. Every approved success run reached verified 24 / 24. Rejection left 20 / 24, and the partial variant ended escalated at 23 / 24. Desktop and mobile screenshots were captured from these API-backed runs.
 
 These checks used the scripted investigator and covered the visibly labelled provider fallback. Live Sarvam proof requires a separately configured provider run.
+
+
+## Process playbook and call log
+
+Every incident type has a defined process (`shared/contracts/playbooks.ts`). The **How this incident is solved** panel in the War Room shows each step with its status (done, running, waiting for a human, not needed) and who does it (automatic, allowed by policy, human decision, system check). Open a step to see every recorded call: the method and endpoint, the HTTP status, **what we sent** and **what came back**, with links to the evidence records.
+
+| Incident | Steps |
+| --- | --- |
+| Paid order shows unpaid (`order-unpaid`) | Detect → read order, Status API and webhook log → policy → resend webhook → verify order is PAID → close or escalate to Payment Gateway Integration Support |
+| Soundbox silent | Detect → read devices → policy → sync settings → verify → re-read failing devices → policy → human approval → restart → final verification → close |
+| Settlement short | Detect → read settlements → policy (no financial change) → hand off to Settlement Operations → close |
+| Duplicate tickets | Detect → read tickets → policy → link → verify links → close |
+
+Run **Paid order shows unpaid** with *Complete recovery* (all 4 orders become PAID, case resolved) or *Partial recovery* (3 of 4 become PAID, one merchant endpoint still returns HTTP 502, escalated).
+
+Endpoints marked "(simulated)" are mock systems in this prototype; each names the Paytm system it would map to in a pilot. The log is read from `GET /api/v1/incidents/:id/playbook` and is stored in `wf_process_log`.

@@ -4,13 +4,13 @@
 // identifiers are strings, dates are UTC ISO 8601 strings.
 import { z } from "zod"
 
-export type Scenario = "soundbox" | "duplicate-tickets" | "settlement-discrepancy"
+export type Scenario = "soundbox" | "order-unpaid" | "duplicate-tickets" | "settlement-discrepancy"
 export type Role = "operator" | "approver"
 export type IncidentStatus =
   | "DETECTED" | "INVESTIGATING" | "INSUFFICIENT_EVIDENCE"
   | "ACTION_RUNNING" | "VERIFYING" | "PARTIALLY_RECOVERED"
   | "APPROVAL_PENDING" | "RESOLVED" | "ESCALATED" | "FAILED" | "TASK_COMPLETED"
-export type ActionKind = "MOCK_SYNC_DEVICE_CONFIG" | "MOCK_RESTART_DEVICE" | "LINK_SUPPORT_TICKETS"
+export type ActionKind = "MOCK_SYNC_DEVICE_CONFIG" | "MOCK_RESTART_DEVICE" | "LINK_SUPPORT_TICKETS" | "RESEND_WEBHOOK"
 export type ApprovalStatus = "PENDING" | "APPROVED" | "REJECTED" | "EXPIRED" | "CONSUMED"
 export type Mode = "live_ai" | "scripted_fallback" | "system"
 
@@ -32,7 +32,7 @@ export interface IncidentCard {
   displayId?: string; typeLabel?: string; zone?: string; detectedAt?: string; owner?: string | null;
 }
 export interface EvidenceView {
-  id: string; kind: "device" | "device_event" | "ticket" | "payment" | "settlement" | "merchant";
+  id: string; kind: "device" | "device_event" | "ticket" | "payment" | "settlement" | "merchant" | "order" | "pg_transaction" | "webhook_attempt";
   title: string; occurredAt: string | null; details: Record<string, string | number | boolean | null>;
 }
 export interface TraceEntry {
@@ -124,6 +124,39 @@ export interface MetricView {
   key: string; label: string; value: string; numerator: number | null; denominator: number | null; detail: string
 }
 export interface MetricsView { generation: number; simulated: true; metrics: MetricView[] }
+// ---------- Process playbook: the steps an incident goes through and every system call it made ----------
+export type StepKind = "detect" | "investigate" | "decide" | "act" | "approve" | "verify" | "handoff" | "close"
+export type StepStatus = "done" | "failed" | "active" | "waiting" | "pending" | "skipped"
+export type EntryKind = "call" | "decision" | "wait" | "result"
+export type EntryOutcome = "OK" | "FAILED" | "INFO" | "BLOCKED"
+/** One recorded interaction: what we hit, what we sent and what came back. Simulated systems are labelled. */
+export interface ProcessEntry {
+  id: string; at: string; stepId: string; kind: EntryKind; system: string; method: string; endpoint: string;
+  request: unknown; response: unknown; httpStatus: number | null; outcome: EntryOutcome;
+  summary: string; evidenceIds: string[]; actionId: string | null;
+}
+export interface PlaybookStepView {
+  id: string; order: number; kind: StepKind; title: string; description: string; system: string | null;
+  automation: "automatic" | "policy-gated" | "human" | "system"; status: StepStatus; entries: ProcessEntry[];
+}
+export interface PlaybookView {
+  generation: number; incidentId: string; scenario: Scenario; title: string; summary: string;
+  steps: PlaybookStepView[];
+}
+// ---------- Runs, jobs and schedules (the background machinery behind an incident) ----------
+export type JobStatus = "PENDING" | "LEASED" | "DONE" | "FAILED" | "CANCELLED"
+export interface JobView {
+  id: string; kind: string; label: string; status: JobStatus; runAfter: string; attempt: number;
+  createdAt: string; updatedAt: string; lastError: string | null;
+}
+export interface RunView {
+  id: string; stage: "triage" | "continuation"; mode: Mode; modeReason: string | null; turnsUsed: number; stepsUsed: number;
+  activeMs: number; status: string; outcome: string | null; startedAt: string; finishedAt: string | null;
+}
+export interface ScheduleView { id: string; title: string; value: string; detail: string }
+export interface RunsView {
+  generation: number; incidentId: string; jobs: JobView[]; runs: RunView[]; schedules: ScheduleView[];
+}
 export interface DashboardView {
   generation: number;
   kpis: { activeIncidents: number; affectedMerchants: number; verifiedResolved: number; pendingApprovals: number };
@@ -145,13 +178,13 @@ const id = z.string().min(1)
 const iso = z.string().min(1)
 const detailValue = z.union([z.string(), z.number(), z.boolean(), z.null()])
 
-export const ScenarioSchema = z.enum(["soundbox", "duplicate-tickets", "settlement-discrepancy"])
+export const ScenarioSchema = z.enum(["soundbox", "order-unpaid", "duplicate-tickets", "settlement-discrepancy"])
 export const RoleSchema = z.enum(["operator", "approver"])
 export const IncidentStatusSchema = z.enum([
   "DETECTED", "INVESTIGATING", "INSUFFICIENT_EVIDENCE", "ACTION_RUNNING", "VERIFYING",
   "PARTIALLY_RECOVERED", "APPROVAL_PENDING", "RESOLVED", "ESCALATED", "FAILED", "TASK_COMPLETED"
 ])
-export const ActionKindSchema = z.enum(["MOCK_SYNC_DEVICE_CONFIG", "MOCK_RESTART_DEVICE", "LINK_SUPPORT_TICKETS"])
+export const ActionKindSchema = z.enum(["MOCK_SYNC_DEVICE_CONFIG", "MOCK_RESTART_DEVICE", "LINK_SUPPORT_TICKETS", "RESEND_WEBHOOK"])
 export const ApprovalStatusSchema = z.enum(["PENDING", "APPROVED", "REJECTED", "EXPIRED", "CONSUMED"])
 export const ModeSchema = z.enum(["live_ai", "scripted_fallback", "system"])
 
@@ -177,7 +210,7 @@ export const IncidentCardSchema = z.object({
   detectedAt: iso.optional(), owner: z.string().nullable().optional()
 })
 export const EvidenceViewSchema = z.object({
-  id, kind: z.enum(["device", "device_event", "ticket", "payment", "settlement", "merchant"]),
+  id, kind: z.enum(["device", "device_event", "ticket", "payment", "settlement", "merchant", "order", "pg_transaction", "webhook_attempt"]),
   title: z.string(), occurredAt: iso.nullable(), details: z.record(z.string(), detailValue)
 })
 export const TraceEntrySchema = z.object({
@@ -264,6 +297,34 @@ export const MetricsViewSchema = z.object({ generation: z.number().int().positiv
 export const ApprovalQueueSchema = z.object({ generation: z.number().int().positive(), approvals: z.array(ApprovalViewSchema) })
 export const DecisionResultSchema = z.object({
   generation: z.number().int().positive(), approval: ApprovalViewSchema, queued: z.boolean()
+})
+const StepKindSchema = z.enum(["detect", "investigate", "decide", "act", "approve", "verify", "handoff", "close"])
+const StepStatusSchema = z.enum(["done", "failed", "active", "waiting", "pending", "skipped"])
+export const ProcessEntrySchema = z.object({
+  id, at: iso, stepId: z.string(), kind: z.enum(["call", "decision", "wait", "result"]), system: z.string(), method: z.string(),
+  endpoint: z.string(), request: z.unknown(), response: z.unknown(), httpStatus: z.number().int().nullable(),
+  outcome: z.enum(["OK", "FAILED", "INFO", "BLOCKED"]), summary: z.string(), evidenceIds: z.array(z.string()), actionId: z.string().nullable()
+})
+export const PlaybookStepViewSchema = z.object({
+  id, order: z.number().int().nonnegative(), kind: StepKindSchema, title: z.string(), description: z.string(), system: z.string().nullable(),
+  automation: z.enum(["automatic", "policy-gated", "human", "system"]), status: StepStatusSchema, entries: z.array(ProcessEntrySchema)
+})
+export const PlaybookViewSchema = z.object({
+  generation: z.number().int().positive(), incidentId: id, scenario: ScenarioSchema, title: z.string(), summary: z.string(),
+  steps: z.array(PlaybookStepViewSchema)
+})
+export const RunsViewSchema = z.object({
+  generation: z.number().int().positive(), incidentId: id,
+  jobs: z.array(z.object({
+    id, kind: z.string(), label: z.string(), status: z.enum(["PENDING", "LEASED", "DONE", "FAILED", "CANCELLED"]), runAfter: iso,
+    attempt: z.number().int().nonnegative(), createdAt: iso, updatedAt: iso, lastError: z.string().nullable()
+  })),
+  runs: z.array(z.object({
+    id, stage: z.enum(["triage", "continuation"]), mode: ModeSchema, modeReason: z.string().nullable(), turnsUsed: z.number().int().nonnegative(),
+    stepsUsed: z.number().int().nonnegative(), activeMs: z.number().nonnegative(), status: z.string(), outcome: z.string().nullable(),
+    startedAt: iso, finishedAt: iso.nullable()
+  })),
+  schedules: z.array(z.object({ id: z.string(), title: z.string(), value: z.string(), detail: z.string() }))
 })
 export const DashboardViewSchema = z.object({
   generation: z.number().int().positive(),

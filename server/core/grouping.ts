@@ -32,6 +32,7 @@ export function groupingView(q: Sql, scope: Scope): GroupingView | null {
   if (scenario === "duplicate-tickets") signals.push({ label: "Shared complaint", value: "Same ticket category and subject" })
   if (scenario === "settlement-discrepancy") signals.push({ label: "Shared batch", value: "Same bank settlement batch with SHORT status" })
   const records = scenario === "soundbox" ? linkedIds(q, scope.incidentId, "device_event").length
+    : scenario === "order-unpaid" ? linkedIds(q, scope.incidentId, "order").length
     : scenario === "duplicate-tickets" ? linkedIds(q, scope.incidentId, "ticket").length : linkedIds(q, scope.incidentId, "settlement").length
 
   let outreach: GroupingView["outreach"] = null
@@ -63,10 +64,11 @@ export function detectionEntries(q: Sql, scope: Scope): { trace: TraceEntry; aud
   const excludedCount = g.excluded.reduce((n, e) => n + e.count, 0)
   const fingerprint = g.signals.map((s) => s.value).join(" · ")
   const what = loaded.scenario === "soundbox" ? `${g.counts.records} notification failures on ${g.counts.devices} devices`
+    : loaded.scenario === "order-unpaid" ? `${g.counts.records} paid orders that still show unpaid`
     : loaded.scenario === "duplicate-tickets" ? `${g.counts.records} support tickets` : `${g.counts.records} short settlements`
   const summary = `Incident detected: grouped ${what} from ${g.counts.merchants} merchants (${fingerprint}).` +
     (excludedCount ? ` ${excludedCount} unrelated record(s) kept separate.` : "")
-  const evidenceKind = loaded.scenario === "soundbox" ? "device_event" : loaded.scenario === "duplicate-tickets" ? "ticket" : "settlement"
+  const evidenceKind = loaded.scenario === "soundbox" ? "device_event" : loaded.scenario === "order-unpaid" ? "order" : loaded.scenario === "duplicate-tickets" ? "ticket" : "settlement"
   const evidenceIds = linkedIds(q, scope.incidentId, evidenceKind).slice(0, 50)
   const auditId = `aud_detect_${scope.incidentId}`
   return {
