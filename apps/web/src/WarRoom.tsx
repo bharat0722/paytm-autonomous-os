@@ -5,7 +5,7 @@ import type {
   ActionView, AuditEntry, DeviceCheck, EvidenceView, GroupingView, IncidentStatus, IncidentView, PlaybookView, RecoveryView, RunsView, TraceEntry,
 } from "../../../shared/contracts/http.js"
 import { CopyId, Dialog, EmptyState, Icon, IncidentBadge, Info, SectionHeader, StatusBadge, Time } from "./ui.js"
-import { approvalPresentation, approvalsHref, incidentHref, incidentPresentation, label, modes, number, scenarios, traceSummary } from "./workspace.js"
+import { actorText, plainRule, plainSignal, approvalPresentation, approvalsHref, incidentHref, incidentPresentation, label, modes, number, scenarios, traceSummary } from "./workspace.js"
 
 const actionTitle: Record<ActionView["kind"], string> = {
   MOCK_SYNC_DEVICE_CONFIG: "Configuration sync", MOCK_RESTART_DEVICE: "Remote device restart", LINK_SUPPORT_TICKETS: "Link support tickets",
@@ -48,11 +48,11 @@ function useReferences(data: IncidentView): Map<string, Ref> {
     })
     for (const a of data.workflow.actions) put({
       id: a.id, kind: "Action", title: actionTitle[a.kind], at: null,
-      facts: [["Status", actionState[a.status]], ["Policy rule", a.ruleId], ["Targets", String(a.targetIds.length)], ["Summary", a.summary]],
+      facts: [["Status", actionState[a.status]], ["Rule that allowed it", plainRule(a.ruleId)], ["Targets", String(a.targetIds.length)], ["Summary", a.summary]],
     })
     for (const p of data.workflow.approvals) put({
       id: p.id, kind: "Approval", title: `Restart approval · ${approvalPresentation[p.status][0]}`, at: p.createdAt,
-      facts: [["Status", approvalPresentation[p.status][0]], ["Devices", p.targetDeviceIds.join(", ")], ["Rule", p.ruleId],
+      facts: [["Status", approvalPresentation[p.status][0]], ["Devices", p.targetDeviceIds.join(", ")], ["Rule", plainRule(p.ruleId)],
         ["Decided by", p.decidedBy ?? "—"], ["Reason", p.reason ?? "—"], ["Expected check", p.expectedCheck]],
     })
     for (const e of data.workflow.audit) put({
@@ -62,7 +62,7 @@ function useReferences(data: IncidentView): Map<string, Ref> {
     })
     for (const t of data.workflow.trace) put({
       id: t.id, kind: "Trace step", title: label(t.stage), at: t.at,
-      facts: [["Engine", modes[t.mode][0]], ["Summary", traceSummary(t.summary)], ...(t.tool ? [["Tool", t.tool] as [string, string]] : [])],
+      facts: [["Engine", modes[t.mode][0]], ["Summary", traceSummary(t.summary)], ],
     })
     const rec = data.workflow.recovery
     if (rec) put({
@@ -85,7 +85,7 @@ function RefChips({ ids, refs, open }: { ids: string[]; refs: Map<string, Ref>; 
         const kind = prefixKinds.find(([p]) => id.startsWith(p))?.[1] ?? "Reference"
         return <li key={id}><span className="ref-chip ref-chip--muted" title="Recorded in the workflow; details are not part of this view">{kind} <code>{id}</code></span></li>
       }
-      return <li key={id}><button className="ref-chip" title={ref.title} onClick={() => open(id)}><span>{ref.kind}</span> <code>{id}</code></button></li>
+      return <li key={id}><button className="ref-chip" title={ref.title} onClick={() => open(id)}><span>{ref.kind}</span> {ref.title ? (ref.title.length > 40 ? ref.title.slice(0, 39) + "…" : ref.title) : "record"}</button></li>
     })}
     {ids.length > 6 && <li><button className="ref-chip ref-chip--muted" aria-expanded={all} onClick={() => setAll(!all)}>{all ? "Show fewer" : `+${ids.length - 6} more`}</button></li>}
   </ul>
@@ -113,7 +113,7 @@ function GroupingPanel({ grouping, openMerchant }: { grouping: GroupingView; ope
   const excluded = grouping.excluded.reduce((n, e) => n + e.count, 0)
   return <section className="card grouping" aria-label="Why these were grouped">
     <SectionHeader title="Why these were grouped" subtitle="Rule-based correlation from stored records: a lead, not a proven cause"/>
-    <ul className="grouping-signals" data-testid="grouping-signals">{grouping.signals.map((s) => <li key={s.label}><span>{s.label}</span><code>{s.value}</code></li>)}</ul>
+    <ul className="grouping-signals" data-testid="grouping-signals">{grouping.signals.map((s) => <li key={s.label}><span>{s.label}</span><strong>{plainSignal(s.value)}</strong></li>)}</ul>
     <dl className="fact-list grouping-facts">
       <div><dt>Grouped</dt><dd data-testid="grouping-counts">{grouping.counts.records} records · {grouping.counts.merchants} merchants{grouping.counts.devices ? ` · ${grouping.counts.devices} devices` : ""}</dd></div>
       <div><dt>Rule</dt><dd>{grouping.rule}</dd></div>
@@ -121,7 +121,7 @@ function GroupingPanel({ grouping, openMerchant }: { grouping: GroupingView; ope
       <div><dt>Kept separate</dt><dd data-testid="grouping-excluded">{excluded ? `${excluded} unrelated record(s)` : "None"}</dd></div>
     </dl>
     {grouping.excluded.length > 0 && <details><summary>Why other records were not merged</summary>
-      <ul>{grouping.excluded.map((e, i) => <li key={i}><code>{e.key}</code>: {e.reason} ({e.count})</li>)}</ul></details>}
+      <ul>{grouping.excluded.map((e, i) => <li key={i}>{plainSignal(e.key)}: {e.reason} ({e.count})</li>)}</ul></details>}
     {grouping.outreach && <div className="outreach" data-testid="outreach">
       <div><strong>{grouping.outreach.complainedMerchants}</strong><span>merchants complained</span></div>
       <div className="outreach-silent"><strong>{grouping.outreach.silentMerchants}</strong><span>affected but silent</span></div>
@@ -216,7 +216,7 @@ function FoundByJob({ data, open }: { data: IncidentView; open: (id: string) => 
     <p className="found-counts">{[...counts].filter(([k]) => words[k]).map(([k, n]) => `${n} ${words[k]}`).join(" · ")}</p>
     {tickets.length > 0 ? <div className="table-wrap"><table><thead><tr><th scope="col">Ticket</th><th scope="col">Merchant</th><th scope="col">What they reported</th><th scope="col">Status</th></tr></thead>
       <tbody>{shown.map((e) => <tr key={e.id}>
-        <td><button className="text-button record-link" onClick={() => open(e.id)}><code>{e.id}</code></button></td>
+        <td><button className="text-button record-link" onClick={() => open(e.id)} title="Open the full record">Ticket {tickets.indexOf(e) + 1}</button></td>
         <td>{names.get(String(e.details.merchantId)) ?? "—"}</td><td>{e.title}</td><td>{String(e.details.status ?? "—")}</td></tr>)}</tbody></table>
       {tickets.length > 5 && <button className="text-button" onClick={() => setAll(!all)}>{all ? "Show fewer tickets" : `Show all ${tickets.length} tickets`}</button>}</div>
       : <p className="muted">No support tickets are linked to this incident.</p>}
@@ -225,7 +225,7 @@ function FoundByJob({ data, open }: { data: IncidentView; open: (id: string) => 
 
 function aiEngine(trace: TraceEntry[]): [string, "green" | "amber" | "neutral"] {
   if (trace.some((t) => t.mode === "live_ai")) return ["Sarvam AI", "green"]
-  if (trace.some((t) => t.mode === "scripted_fallback")) return ["Scripted fallback (deterministic)", "amber"]
+  if (trace.some((t) => t.mode === "scripted_fallback")) return ["Backup script (fixed steps)", "amber"]
   return ["System", "neutral"]
 }
 
@@ -282,7 +282,6 @@ function InvestigationTab({ entries, refs, open }: { entries: TraceEntry[]; refs
           <div className="trace-body">
             <div className="step-meta"><strong>{label(entry.stage)}</strong><StatusBadge text={mode} tone={tone}/><span className="muted"><Time value={entry.at} clock/></span></div>
             <p>{traceSummary(entry.summary)}</p>
-            {entry.tool && <code className="tool-code">{entry.tool}</code>}
             <RefChips ids={entry.evidenceIds} refs={refs} open={open}/>
           </div>
         </li>
@@ -302,7 +301,7 @@ function ActionsTab({ data, refs, open, closed }: { data: IncidentView; refs: Ma
           <td><button className="text-button" onClick={() => open(a.id)}><strong>{actionTitle[a.kind]}</strong></button></td>
           <td><StatusBadge text={actionState[a.status]} tone={a.status === "FAILED" || a.status === "BLOCKED" ? "red" : a.status === "SUCCEEDED" ? "green" : "neutral"}/></td>
           <td className="num">{a.targetIds.length}</td>
-          <td><code>{a.ruleId}</code></td>
+          <td>{plainRule(a.ruleId)}</td>
           <td>{a.summary}</td>
         </tr>)}</tbody>
       </table></div>}
@@ -346,7 +345,7 @@ function AuditTab({ entries, refs, open }: { entries: AuditEntry[]; refs: Map<st
       <tbody>{entries.map((e) => <tr key={e.id}>
         <td><Time value={e.at}/></td>
         <td><strong>{label(e.event)}</strong></td>
-        <td><code>{e.actor}</code></td>
+        <td>{actorText(e.actor)}</td>
         <td>{e.summary}<RefChips ids={[...(e.actionId ? [e.actionId] : []), ...(e.approvalId ? [e.approvalId] : []), ...e.evidenceIds]} refs={refs} open={open}/></td>
       </tr>)}</tbody>
     </table></div>}
@@ -407,7 +406,7 @@ export function WarRoom({ data, playbook, runs, deepEvidence, canResume, resumin
       </div>
       {profile && <p className="incident-description">{profile.description}</p>}
       <dl className="incident-facts">
-        {profile && <div><dt>Detected by job</dt><dd data-tip="The scheduled monitor that caught this on its own. In production it runs continuously, so problems are found before merchants call." data-tip-pos="bottom">{profile.detectedBy.jobName}<small>Job ID <code>{profile.detectedBy.jobId}</code></small><small><code>{profile.detectedBy.cron}</code> · {profile.detectedBy.scheduleLabel}</small></dd></div>}
+        {profile && <div><dt>Detected by job</dt><dd data-tip="The scheduled monitor that caught this on its own. In production it runs continuously, so problems are found before merchants call." data-tip-pos="bottom">{profile.detectedBy.jobName}<small>Job ID <code>{profile.detectedBy.jobId}</code></small><small>{profile.detectedBy.scheduleLabel}</small></dd></div>}
         <div><dt>Detected at</dt><dd>{profile ? <Time value={profile.detectedBy.ranAt}/> : incident.detectedAt ? <Time value={incident.detectedAt}/> : "—"}</dd></div>
         {profile && <div><dt>Threshold</dt><dd>{profile.threshold}</dd></div>}
         <div><dt>Impact</dt><dd>{number.format(incident.affectedMerchantCount)} merchants{incident.affectedDeviceCount > 0 && <small>{number.format(incident.affectedDeviceCount)} devices</small>}</dd></div>

@@ -2,7 +2,7 @@ import { useRef, useState, type FormEvent } from "react"
 import type { ApprovalDecision, ApprovalQueue, ApprovalView, DecisionResult, Role } from "../../../shared/contracts/http.js"
 import { asProblem, type ApiProblem } from "./api.js"
 import { Dialog, EmptyState, Icon, InlineError, SectionHeader, StatusBadge, Time } from "./ui.js"
-import { approvalPresentation, approvalsHref, incidentHref, label } from "./workspace.js"
+import { actorText, plainRule, approvalPresentation, approvalsHref, incidentHref, label } from "./workspace.js"
 
 function ApprovalBadge({ status }: { status: ApprovalView["status"] }) {
   const [name, tone] = approvalPresentation[status]
@@ -56,7 +56,7 @@ function DecisionDialog({ proposal, decision, dismiss, onDecide, onDone }: {
     <form className="dialog-form" onSubmit={(event) => void submit(event)}>
       <p>{approve ? "Approve a restart for these exact devices." : "The incident will remain open for follow-up."}</p>
       <Targets ids={proposal.targetDeviceIds}/>
-      <div className="policy-note"><Icon name="lock" size={16}/><div><strong>Policy</strong><code>{proposal.ruleId}</code></div></div>
+      <div className="policy-note"><Icon name="lock" size={16}/><div><strong>Why a person must decide</strong><span>This follows {plainRule(proposal.ruleId)}.</span></div></div>
       {!approve && <label className="field">Reason <span className="muted">(optional)</span><textarea rows={3} maxLength={500}
         value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Add a note for the incident owner"/></label>}
       {error && <InlineError problem={error}/>}
@@ -103,12 +103,12 @@ export function ApprovalCenter({ data, selectedId, role, onDecide, onDone }: {
             <div><h3>How recovery is checked</h3><p>{proposal.expectedCheck}</p></div>
           </div>
           <div className="approval-targets"><h3>Exact target devices</h3><Targets ids={proposal.targetDeviceIds}/></div>
-          <div className="policy-note"><Icon name="lock" size={16}/><div><strong>Policy</strong><code>{proposal.ruleId}</code></div></div>
+          <div className="policy-note"><Icon name="lock" size={16}/><div><strong>Why a person must decide</strong><span>This follows {plainRule(proposal.ruleId)}.</span></div></div>
           <dl className="fact-list">
             <div><dt>Requested</dt><dd><Time value={proposal.createdAt}/></dd></div>
             <div><dt>Expires</dt><dd><Time value={proposal.expiresAt}/></dd></div>
             {proposal.decidedAt && <div><dt>Decided</dt><dd><Time value={proposal.decidedAt}/></dd></div>}
-            {proposal.decidedBy && <div><dt>Decision actor</dt><dd><code>{proposal.decidedBy}</code></dd></div>}
+            {proposal.decidedBy && <div><dt>Decision actor</dt><dd>{actorText(proposal.decidedBy)}</dd></div>}
             {proposal.reason && <div><dt>Decision note</dt><dd>{proposal.reason}</dd></div>}
           </dl>
           <details><summary>Request parameters and evidence</summary>

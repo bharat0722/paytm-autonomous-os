@@ -549,3 +549,10 @@ button.ref-chip:hover { background: var(--sky); border-color: #9fcbe8; }
 .autofix-flow strong { font-size: 1.02rem; margin-top: 4px; }
 .autofix-flow p { font-size: .86rem; color: var(--muted); }
 @media (max-width: 860px) { .autofix-flow { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* ---------- Plain-language call cards ---------- */
+.call-main { font-size: .98rem; font-weight: 600; margin-bottom: 6px; }
+.call-system { font-size: .8rem; color: var(--muted); }
+.call-tech { margin-top: 8px; }
+.call-tech > summary { font-size: .8rem; color: var(--muted); }
+.call-tech > .call-head { margin-top: 8px; }

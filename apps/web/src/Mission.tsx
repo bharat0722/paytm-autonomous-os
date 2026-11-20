@@ -86,9 +86,9 @@ function DetectionJobs({ data, canRun, busy, run }: {
       <thead><tr><th scope="col">Job</th><th scope="col">Detects</th><th scope="col">Severity</th><th scope="col">Schedule</th><th scope="col">Last run</th><th scope="col">Next run</th>{canRun && <th scope="col"><span className="sr-only">Run</span></th>}</tr></thead>
       <tbody>{data.jobs.map((job) => <tr key={job.id}>
         <td><strong>{job.name}</strong><small className="muted">{job.zone}</small></td>
-        <td>{job.typeLabel}<small className="muted"><code>{job.incidentType}</code></small></td>
+        <td>{job.typeLabel}</td>
         <td><StatusBadge text={label(job.severity)} tone={severityTone[job.severity]}/></td>
-        <td><code>{job.cron}</code><small className="muted">{job.scheduleLabel}</small></td>
+        <td>{job.scheduleLabel}</td>
         <td>{job.lastRun ? <a href={incidentHref(job.lastRun.incidentId)} className="job-run"><Time value={job.lastRun.ranAt} clock/>
           <small>{job.lastRun.displayId}{job.lastRun.status && ` · ${label(job.lastRun.status)}`}</small></a> : <span className="muted">No run yet</span>}</td>
         <td><Time value={job.nextFireAt} clock/></td>
@@ -106,7 +106,7 @@ function IncidentTypes({ data }: { data?: DetectionJobsView }) {
     {!data ? <p className="muted">Loading…</p> : <ul className="type-list">{data.jobs.map((job) => <li key={job.id}>
       <div className="type-head"><strong>{job.typeLabel}</strong><StatusBadge text={label(job.severity)} tone={severityTone[job.severity]}/></div>
       <p>{job.description}</p>
-      <dl className="type-facts"><div><dt>Threshold</dt><dd>{job.threshold}</dd></div><div><dt>Zone</dt><dd>{job.zone}</dd></div><div><dt>Code</dt><dd><code>{job.incidentType}</code></dd></div></dl>
+      <dl className="type-facts"><div><dt>Threshold</dt><dd>{job.threshold}</dd></div><div><dt>Zone</dt><dd>{job.zone}</dd></div></dl>
     </li>)}</ul>}
   </section>
 }

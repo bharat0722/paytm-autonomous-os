@@ -1,7 +1,7 @@
 import { useState } from "react"
 import type { PlaybookStepView, PlaybookView, ProcessEntry, StepStatus } from "../../../shared/contracts/http.js"
 import { EvidenceLinks, Icon, Info, SectionHeader, StatusBadge, Time, type IconName } from "./ui.js"
-import type { Tone } from "./workspace.js"
+import { humanize, type Tone } from "./workspace.js"
 
 const statusText: Record<StepStatus, [string, Tone]> = {
   done: ["Done", "green"], failed: ["Needs attention", "red"], active: ["Running now", "blue"], waiting: ["Waiting for a person", "amber"],
@@ -30,20 +30,21 @@ function HttpChip({ status }: { status: number | null }) {
 function Call({ entry, openEvidence }: { entry: ProcessEntry; openEvidence: (id: string) => void }) {
   const guard = entry.system === "Guardrail"
   const tone: Tone = guard ? "neutral" : entry.outcome === "FAILED" ? "red" : entry.outcome === "BLOCKED" ? "amber" : entry.outcome === "INFO" ? "neutral" : "green"
-  const chip = guard ? "Caught · safe" : entry.outcome === "OK" ? "OK" : entry.outcome === "INFO" ? "Info" : entry.outcome === "BLOCKED" ? "Stopped by rule" : "Failed"
+  const chip = guard ? "Caught · safe" : entry.outcome === "OK" ? "Done" : entry.outcome === "INFO" ? "Note" : entry.outcome === "BLOCKED" ? "Stopped by rule" : "Failed"
   return <li className="call">
+    <p className="call-main">{humanize(entry.summary)}</p>
     <div className="call-head">
-      <span className="method">{entry.method}</span>
-      <code className="endpoint">{entry.endpoint}</code>
-      <HttpChip status={entry.httpStatus}/>
       <StatusBadge text={chip} tone={tone}/>
+      <span className="call-system">{entry.system}</span>
       <Time value={entry.at} clock/>
     </div>
-    <p className="call-summary"><strong>{entry.system}</strong> · {entry.summary}</p>
-    <div className="call-io">
-      <div><h4>What we sent</h4><pre tabIndex={0}>{json(entry.request)}</pre></div>
-      <div><h4>What came back</h4><pre tabIndex={0}>{json(entry.response)}</pre></div>
-    </div>
+    <details className="call-tech"><summary>Technical details</summary>
+      <div className="call-head"><span className="method">{entry.method}</span><code className="endpoint">{entry.endpoint}</code><HttpChip status={entry.httpStatus}/></div>
+      <div className="call-io">
+        <div><h4>What we sent</h4><pre tabIndex={0}>{json(entry.request)}</pre></div>
+        <div><h4>What came back</h4><pre tabIndex={0}>{json(entry.response)}</pre></div>
+      </div>
+    </details>
     <EvidenceLinks ids={entry.evidenceIds} open={openEvidence}/>
   </li>
 }
