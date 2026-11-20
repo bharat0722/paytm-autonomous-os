@@ -88,6 +88,14 @@ export const DETECTION_JOBS: readonly DetectionJob[] = Object.freeze([
     }
   },
   {
+    id: "pg-webhook-monitor", batchKey: "order-unpaid", scenario: "order-unpaid",
+    name: "Paid-order webhook monitor", cron: "*/5 * * * *", scheduleLabel: "Every 5 minutes",
+    incidentType: "PG_ORDER_UNPAID", typeLabel: "Paid order shows unpaid",
+    description: "Customers paid and Paytm recorded the payment, but the merchant's order still shows unpaid because the payment alert (webhook) never reached the merchant's server.",
+    threshold: "≥ 3 merchants · same webhook failure (HTTP 502) · within 5 minutes",
+    zone: "North-2", severity: "MEDIUM", supportsPartial: true
+  },
+  {
     id: "support-dedupe", batchKey: "duplicate-tickets", scenario: "duplicate-tickets",
     name: "Support queue de-duplication", cron: "0 * * * *", scheduleLabel: "Hourly at :00",
     incidentType: "DUPLICATE_COMPLAINTS", typeLabel: "Repeated merchant complaints",

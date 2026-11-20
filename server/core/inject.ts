@@ -242,6 +242,92 @@ function injectSettlement(ctx: Ctx): string {
   return incidentId
 }
 
+// ---------- Scenario D: payment succeeded, merchant order still unpaid (Payment Gateway) ----------
+const WEBHOOK_FAIL_KEY = "WEBHOOK_FAILED|HTTP_502"
+
+function injectOrderUnpaid(ctx: Ctx, variant: Variant, job: DetectionJob): string {
+  const { tx, generation, batchId } = ctx
+  const r = prng(31)
+  const t0 = addMs(TELEMETRY_BASE, 10 * 60_000)
+  const candidates: Candidate[] = []
+  const stamp = (n: number) => `20261120${String(1100 + n)}`
+
+  interface Plan {
+    merchant: string; ref: string; rupees: number; merchantStatus: "UNPAID" | "CANCELLED"; pg: "TXN_SUCCESS" | "PENDING"
+    attempts: { at: string; http: number; error: string | null; trigger: string }[]; resendWorks: boolean; cohort: boolean; key: string
+  }
+  const fail = (at: string, n: number) => ({ at, http: 502, error: "Bad Gateway: merchant endpoint unreachable", trigger: n === 1 ? "AUTO" : "AUTO_RETRY" })
+  const plans: Plan[] = []
+  PRIVATE_FIXTURE.orderCohort.forEach((o, i) => {
+    const base = addMs(t0, i * 20_000)
+    plans.push({
+      merchant: o.merchant, ref: o.ref, rupees: o.rupees, merchantStatus: "UNPAID", pg: "TXN_SUCCESS", cohort: true, key: WEBHOOK_FAIL_KEY,
+      attempts: [fail(base, 1), fail(addMs(base, 30_000), 2), fail(addMs(base, 120_000), 3)],
+      resendWorks: !(variant === "partial" && o.ref === PRIVATE_FIXTURE.orderPartialFailRef),
+    })
+  })
+  // Decoys with a different cause, so grouping must separate them.
+  plans.push({ merchant: "M083", ref: "ORD-4001", rupees: 750, merchantStatus: "UNPAID", pg: "PENDING", cohort: false, key: "PG_STATUS_PENDING", attempts: [], resendWorks: true })
+  plans.push({
+    merchant: "M084", ref: "ORD-5001", rupees: 3200, merchantStatus: "CANCELLED", pg: "TXN_SUCCESS", cohort: false, key: "LATE_SUCCESS_ORDER_CANCELLED",
+    attempts: [{ at: addMs(t0, 15_000), http: 200, error: null, trigger: "AUTO" }], resendWorks: true,
+  })
+  plans.push({
+    merchant: "M085", ref: "ORD-6001", rupees: 410, merchantStatus: "UNPAID", pg: "TXN_SUCCESS", cohort: false, key: WEBHOOK_FAIL_KEY,
+    attempts: [fail(addMs(TELEMETRY_BASE, -40 * 60_000), 1)], resendWorks: true,
+  })
+
+  plans.forEach((p, idx) => {
+    const merchantId = merchantByRef(tx, generation, p.merchant)
+    const orderId = newId("ord")
+    const created = addMs(t0, -90_000 + idx * 1_000)
+    tx.run(`INSERT INTO orders (id, generation, batch_id, merchant_id, merchant_order_ref, amount_paise, merchant_status, created_at, paid_at)
+            VALUES (?,?,?,?,?,?,?,?,NULL)`, [orderId, generation, batchId, merchantId, p.ref, p.rupees * 100, p.merchantStatus, created])
+    const txnId = newId("ptx")
+    const success = p.pg === "TXN_SUCCESS"
+    tx.run(`INSERT INTO pg_transactions (id, generation, order_id, txn_ref, bank_txn_ref, status, resp_code, resp_msg, payment_mode, occurred_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      [txnId, generation, orderId, stamp(idx), success ? `BNK${r.int(100000, 999999)}` : null, p.pg, success ? "01" : "402",
+        success ? "Txn Success" : "Transaction is pending at the bank", "UPI", addMs(created, 45_000)])
+    p.attempts.forEach((a, k) => tx.run(
+      "INSERT INTO webhook_attempts (id, generation, order_id, attempt_no, trigger, http_status, error, occurred_at) VALUES (?,?,?,?,?,?,?,?)",
+      [newId("wha"), generation, orderId, k + 1, a.trigger, a.http, a.error, a.at]))
+    tx.run("INSERT INTO sim_order_behavior (order_id, generation, resend_works) VALUES (?,?,?)", [orderId, generation, p.resendWorks ? 1 : 0])
+    const lastAt = p.attempts.length ? p.attempts[p.attempts.length - 1]!.at : addMs(created, 45_000)
+    candidates.push({ recordId: orderId, merchantId, key: p.key, at: lastAt })
+  })
+
+  // Tickets raised by merchants whose customers paid.
+  for (const m of PRIVATE_FIXTURE.orderTicketMerchants) {
+    tx.run(`INSERT INTO tickets (id, generation, batch_id, seed_ref, merchant_id, device_id, category, subject, status, linked_to, created_at)
+            VALUES (?,?,?,?,?,NULL,?,?,?,NULL,?)`,
+      [newId("tkt"), generation, batchId, `T-ORD-${m}`, merchantByRef(tx, generation, m), "ORDER_UNPAID", "Customer paid but order still shows unpaid", "OPEN", addMs(t0, 4 * 60_000)])
+  }
+
+  const { groups, excluded } = correlate(candidates)
+  const group = groups[0]
+  if (!group) throw new CoreError("INVALID_INPUT", "Injection produced no correlated group.")
+  const orderIds = group.members.map((m) => m.recordId)
+  const incidentId = createIncident(ctx, "order-unpaid",
+    `Payment succeeded but merchant order still unpaid (${orderIds.length} orders, ${group.merchants.length} merchants)`, "MEDIUM", {
+      rule: "same webhook failure signature (HTTP 502), >= 3 distinct merchants within 5 minutes",
+      windowMinutes: CORE_DEFAULTS.correlationWindowMinutes, minMerchants: MIN_MERCHANTS,
+      jobId: job.id, shared: { errorSignature: group.key },
+      window: { start: group.windowStart, end: group.windowEnd },
+      orderCount: orderIds.length, merchantCount: group.merchants.length, excluded,
+      note: "Grouping by a shared webhook failure is a correlation, not proof of one root cause."
+    })
+  const ph = orderIds.map(() => "?").join(",")
+  link(tx, incidentId, "order", orderIds)
+  link(tx, incidentId, "pg_transaction", tx.all<{ id: string }>(`SELECT id FROM pg_transactions WHERE generation = ? AND order_id IN (${ph})`, [generation, ...orderIds]).map((x) => x.id))
+  link(tx, incidentId, "webhook_attempt", tx.all<{ id: string }>(`SELECT id FROM webhook_attempts WHERE generation = ? AND order_id IN (${ph})`, [generation, ...orderIds]).map((x) => x.id))
+  link(tx, incidentId, "merchant", group.merchants)
+  const mph = group.merchants.map(() => "?").join(",")
+  link(tx, incidentId, "ticket", tx.all<{ id: string }>(`SELECT id FROM tickets WHERE batch_id = ? AND merchant_id IN (${mph})`, [batchId, ...group.merchants]).map((x) => x.id))
+  advanceTelemetry(tx, generation, 5 * 60_000)
+  return incidentId
+}
+
 /**
  * Run one detection job (ingest its dataset) once per generation. An identical replay returns
  * the existing IDs; a different variant for the same job is a conflict until reset.
@@ -249,7 +335,7 @@ function injectSettlement(ctx: Ctx): string {
 export function injectScenario(db: CoreDb, clock: Clock, expectedGeneration: number, scenario: Scenario, variant: Variant, jobId?: string): InjectResult {
   const job = jobId ? jobById(jobId) : defaultJobFor(scenario)
   if (!job || job.scenario !== scenario) throw new CoreError("INVALID_INPUT", `Unknown detection job ${String(jobId)} for ${scenario}.`)
-  if (variant === "partial" && !job.supportsPartial) throw new CoreError("INVALID_INPUT", "Only device detection jobs accept the partial variant.")
+  if (variant === "partial" && !job.supportsPartial) throw new CoreError("INVALID_INPUT", "Only device and payment-order detection jobs accept the partial variant.")
   return db.write((tx) => {
     assertActive(tx, expectedGeneration)
     const existing = tx.get<{ id: string; variant: string; incident_id: string }>(
@@ -264,6 +350,7 @@ export function injectScenario(db: CoreDb, clock: Clock, expectedGeneration: num
       [batchId, expectedGeneration, job.batchKey, variant, now])
     const ctx: Ctx = { tx, generation: expectedGeneration, batchId, now }
     const incidentId = scenario === "soundbox" ? injectSoundbox(ctx, variant, job)
+      : scenario === "order-unpaid" ? injectOrderUnpaid(ctx, variant, job)
       : scenario === "duplicate-tickets" ? injectDuplicateTickets(ctx) : injectSettlement(ctx)
     enqueueJob(tx, clock, { generation: expectedGeneration, incidentId, key: initialInvestigationKey(incidentId), kind: "workflow.investigate", runAfter: now, payload: {} })
     return { generation: expectedGeneration, batchId, incidentId }

@@ -3,13 +3,14 @@
 import type { CoreIncident, CoreRuntime, Job, Observation, Sql } from "../../shared/contracts/core.js"
 import type { DeviceCheck, Scope } from "../../shared/contracts/http.js"
 import type { WorkflowOptions } from "./config.js"
-import { FIELD_OWNER, SUPPORT_OWNER, transition } from "./machine.js"
+import { FIELD_OWNER, PG_SUPPORT_OWNER, SUPPORT_OWNER, transition } from "./machine.js"
+import { VERIFY_CALLS, VERIFY_STEP, sampleList } from "./process.js"
 import { ticketLinkTarget } from "./policy.js"
 import {
-  addAudit, addEscalation, getAction, getState, latestVerification, listActionTargets, listActions, saveState,
+  addAudit, addEscalation, addProcessLog, getAction, getState, latestVerification, listActionTargets, listActions, saveState,
   type ActionRow, type ActionTargetRow,
 } from "./store.js"
-import { FencedError, addMs, guardJob, opaqueId, scopeOf } from "./util.js"
+import { FencedError, addMs, guardJob, opaqueId, scopeOf, parseJson } from "./util.js"
 import { linkGroupsOfAction } from "./executor.js"
 
 export const REQUIRED_SIGNALS: Observation["kind"][] = ["heartbeat", "config", "notification_probe"]
@@ -91,6 +92,30 @@ function evaluateLinks(core: CoreRuntime, tx: Sql, scope: Scope, action: ActionR
   })
 }
 
+/** Reads each resent order back from the merchant side: PAID passes; a resend the merchant still rejects fails. */
+function evaluateOrders(core: CoreRuntime, tx: Sql, scope: Scope, action: ActionRow, cutoff: string, windowMs: number): DeviceEvaluation[] {
+  const targets = parseJson<string[]>(action.target_ids, [])
+  const orders = new Map(core.evidence.read(tx, scope, { kind: "order", ids: targets, limit: 200 }).map((r) => [r.id, r]))
+  const attempts = core.evidence.read(tx, scope, { kind: "webhook_attempt", limit: 200 })
+  const deadline = addMs(action.executed_at ?? cutoff, windowMs)
+  return targets.map((id) => {
+    const rec = orders.get(id)
+    const ref = String(rec?.details.orderRef ?? id)
+    const mine = attempts.filter((a) => a.details.orderId === id).sort((a, b) => Number(a.details.attemptNo ?? 0) - Number(b.details.attemptNo ?? 0))
+    const last = mine[mine.length - 1]
+    const ev = [id, ...(last ? [last.id] : [])]
+    let check: DeviceCheck
+    if (rec?.details.merchantStatus === "PAID") {
+      check = { deviceId: id, actionId: action.id, status: "PASS", reason: `Merchant order ${ref} now reads PAID after the resend (webhook HTTP ${String(last?.details.httpStatus ?? 200)}).`, evidenceIds: ev }
+    } else if (last && last.details.trigger === "RESEND" && last.details.httpStatus !== 200) {
+      check = { deviceId: id, actionId: action.id, status: "FAIL", reason: `Merchant endpoint still returned HTTP ${String(last.details.httpStatus)} after the resend; order ${ref} is still UNPAID.`, evidenceIds: ev }
+    } else {
+      check = { deviceId: id, actionId: action.id, status: "AWAITING", reason: `Awaiting the merchant's confirmation for order ${ref}.`, evidenceIds: ev }
+    }
+    return { check, deadline }
+  })
+}
+
 export function makeVerifyHandler(core: CoreRuntime, options: WorkflowOptions) {
   return async (job: Job): Promise<void> => {
     try {
@@ -116,9 +141,12 @@ function verifyTx(core: CoreRuntime, options: WorkflowOptions, tx: Sql, job: Job
   const now = core.clock.now()
   const cutoff = core.clock.telemetryNow(tx, scope)
   const isLink = action.kind === "LINK_SUPPORT_TICKETS"
+  const isOrder = action.kind === "RESEND_WEBHOOK"
   const evals = isLink
     ? evaluateLinks(core, tx, scope, action, cutoff, options.verifyWindowMs)
-    : evaluateDevices(core, tx, scope, incident, cutoff, options.verifyWindowMs)
+    : isOrder
+      ? evaluateOrders(core, tx, scope, action, cutoff, options.verifyWindowMs)
+      : evaluateDevices(core, tx, scope, incident, cutoff, options.verifyWindowMs)
 
   const awaiting = evals.filter((e) => e.check.status === "AWAITING")
   const windowOpen = awaiting.some((e) => e.deadline !== null && cutoff < e.deadline)
@@ -149,6 +177,23 @@ function verifyTx(core: CoreRuntime, options: WorkflowOptions, tx: Sql, job: Job
 
   const evidenceIds = [checkId]
   const tally = `${recovered}/${checks.length}`
+  {
+    const vc = VERIFY_CALLS[action.kind] ?? { system: "Verifier", method: "GET", endpoint: "/verify" }
+    const sample = checks.filter((c) => c.status !== "PASS").concat(checks.filter((c) => c.status === "PASS")).slice(0, 6)
+    const complete = recovered === checks.length && checks.length > 0
+    const partialSync = action.kind === "MOCK_SYNC_DEVICE_CONFIG" && !complete
+    addProcessLog(tx, scope, `verify:${checkId}`, {
+      at: now, stepId: VERIFY_STEP[action.kind] ?? "verify", kind: "call", system: vc.system, method: vc.method, endpoint: vc.endpoint,
+      request: { actionId: action.id, since: "after the action ran", cutoff, windowSeconds: Math.round(options.verifyWindowMs / 1000), targetCount: checks.length },
+      response: {
+        verified: recovered, total: checks.length, remaining: sampleList(remaining),
+        checks: sample.map((c) => ({ id: c.deviceId, status: c.status, reason: c.reason })),
+      },
+      httpStatus: 200, outcome: complete || partialSync ? (complete ? "OK" : "INFO") : "FAILED",
+      summary: complete ? `${tally} verified from fresh evidence.` : `${tally} verified; ${remaining.length} still failing.`,
+      evidenceIds: [checkId], actionId: action.id,
+    })
+  }
   const auditId = addAudit(tx, scope, `verify:${checkId}`, {
     at: now, actor: "workflow:verifier", event: "VERIFICATION_RECORDED",
     summary: `${isLink ? "Stored ticket links" : "Fresh observations"}: ${tally} verified (cutoff ${cutoff}).`,
@@ -158,10 +203,18 @@ function verifyTx(core: CoreRuntime, options: WorkflowOptions, tx: Sql, job: Job
   if (recovered === checks.length && checks.length > 0) {
     transition(core, tx, scope, incident, {
       to: isLink ? "TASK_COMPLETED" : "RESOLVED", verifiedCheckId: checkId, mode: "system", stage: "verification",
-      reason: isLink ? `All ${tally} duplicate links verified in storage.` : `Verifier confirmed ${tally} devices recovered with fresh observations.`,
+      reason: isLink ? `All ${tally} duplicate links verified in storage.` : isOrder ? `Verifier confirmed ${tally} orders now read PAID at the merchant.` : `Verifier confirmed ${tally} devices recovered with fresh observations.`,
       opKey: `verify:${checkId}:closed`, evidenceIds, auditId,
     })
     saveState(tx, scope, now, { scenario: incident.card.scenario, phase: "DONE" })
+    return
+  }
+
+  if (isOrder) {
+    const blocker = `Only ${tally} orders now read PAID; ${remaining.length} still fail after the webhook resend because the merchant endpoint is unreachable. Needs merchant or integration support.`
+    addEscalation(tx, scope, `verify:${checkId}`, { at: now, reasonCode: "ORDER_WEBHOOK_STILL_FAILING", summary: blocker, owner: PG_SUPPORT_OWNER, retryable: false, evidenceIds })
+    transition(core, tx, scope, incident, { to: "ESCALATED", blocker, owner: PG_SUPPORT_OWNER, mode: "system", stage: "verification", reason: blocker, opKey: `verify:${checkId}:escalated`, evidenceIds, auditId })
+    saveState(tx, scope, now, { scenario: incident.card.scenario, phase: "DONE", blockerCode: "ORDER_WEBHOOK_STILL_FAILING" })
     return
   }
 

@@ -5,8 +5,9 @@ import type { CoreIncident, CoreRuntime, Job, Sql } from "../../shared/contracts
 import type { Scope } from "../../shared/contracts/http.js"
 import { bindingOf, getApprovalForAction, proposalRevision } from "./approvals.js"
 import type { WorkflowOptions } from "./config.js"
-import { FIELD_OWNER, SUPPORT_OWNER, transition } from "./machine.js"
-import { addAudit, addEscalation, deviceChecks, getAction, latestVerification, saveState, type ActionRow } from "./store.js"
+import { FIELD_OWNER, PG_SUPPORT_OWNER, SUPPORT_OWNER, transition } from "./machine.js"
+import { ACT_STEP, WRITE_CALLS, sampleList } from "./process.js"
+import { addAudit, addEscalation, addProcessLog, deviceChecks, getAction, latestVerification, saveState, type ActionRow } from "./store.js"
 import { FencedError, addMs, guardJob, parseJson, scopeOf, sortedUnique } from "./util.js"
 import { linkGroupsOf, type LinkGroup } from "./policy.js"
 
@@ -22,11 +23,12 @@ const LABEL: Record<string, string> = {
   MOCK_SYNC_DEVICE_CONFIG: "Mock config sync",
   MOCK_RESTART_DEVICE: "Mock restart",
   LINK_SUPPORT_TICKETS: "Ticket linking",
+  RESEND_WEBHOOK: "Webhook resend",
 }
 
 /** Execution-time authorization. Returns a block reason, or null when the effect may run. */
 export function authorizeExecution(
-  tx: Sql, scope: Scope, incident: CoreIncident, action: ActionRow, now: string,
+  tx: Sql, scope: Scope, incident: CoreIncident, action: ActionRow, now: string, orderIds?: ReadonlySet<string>,
 ): { code: string; reason: string } | null {
   const targets = parseJson<string[]>(action.target_ids, [])
   if (incident.card.status !== "ACTION_RUNNING") return { code: "NOT_RUNNING", reason: `Incident is ${incident.card.status}, not ACTION_RUNNING.` }
@@ -35,6 +37,10 @@ export function authorizeExecution(
     case "MOCK_SYNC_DEVICE_CONFIG":
       if (incident.card.scenario !== "soundbox") return { code: "SCENARIO", reason: "Config sync is only for the Soundbox incident." }
       if (!targets.length || targets.some((t) => !cohort.has(t))) return { code: "TARGET_SCOPE", reason: "Sync targets are outside the frozen cohort." }
+      return null
+    case "RESEND_WEBHOOK":
+      if (incident.card.scenario !== "order-unpaid") return { code: "SCENARIO", reason: "Webhook resend is only for the unpaid-order incident." }
+      if (!targets.length || !orderIds || targets.some((t) => !orderIds.has(t))) return { code: "TARGET_SCOPE", reason: "Resend targets are outside the incident's orders." }
       return null
     case "LINK_SUPPORT_TICKETS":
       if (incident.card.scenario !== "duplicate-tickets") return { code: "SCENARIO", reason: "Ticket linking is only for the duplicate-ticket incident." }
@@ -94,7 +100,9 @@ function executeTx(core: CoreRuntime, options: WorkflowOptions, tx: Sql, job: Jo
   const targets = parseJson<string[]>(action.target_ids, [])
   const label = LABEL[action.kind] ?? action.kind
 
-  const blocked = authorizeExecution(tx, scope, incident, action, now)
+  const orderIds = action.kind === "RESEND_WEBHOOK"
+    ? new Set(core.evidence.read(tx, scope, { kind: "order", limit: 200 }).map((o) => o.id)) : undefined
+  const blocked = authorizeExecution(tx, scope, incident, action, now, orderIds)
   if (blocked) {
     tx.run("UPDATE wf_actions SET status = 'BLOCKED' WHERE id = ? AND status = 'PROPOSED'", [action.id])
     const approval = getApprovalForAction(tx, action.id)
@@ -102,8 +110,14 @@ function executeTx(core: CoreRuntime, options: WorkflowOptions, tx: Sql, job: Jo
       at: now, actor: "workflow:executor", event: "EXECUTION_BLOCKED", summary: `${label} blocked (${blocked.code}): ${blocked.reason} No effect was applied.`,
       actionId: action.id, approvalId: approval?.id ?? null,
     })
+    const wc = WRITE_CALLS[action.kind]
+    addProcessLog(tx, scope, `execute:${action.id}:blocked`, {
+      at: now, stepId: ACT_STEP[action.kind] ?? "act", kind: "decision", system: "Execution gate", method: "AUTHORIZE", endpoint: wc?.endpoint ?? "execute",
+      request: { actionId: action.id, kind: action.kind, targets: sampleList(targets) }, response: { allowed: false, code: blocked.code, reason: blocked.reason },
+      httpStatus: 403, outcome: "BLOCKED", summary: `${label} blocked (${blocked.code}): ${blocked.reason}`, actionId: action.id,
+    })
     if (incident.card.status === "ACTION_RUNNING") {
-      const owner = action.kind === "LINK_SUPPORT_TICKETS" ? SUPPORT_OWNER : FIELD_OWNER
+      const owner = action.kind === "LINK_SUPPORT_TICKETS" ? SUPPORT_OWNER : action.kind === "RESEND_WEBHOOK" ? PG_SUPPORT_OWNER : FIELD_OWNER
       addEscalation(tx, scope, `execute:${action.id}:blocked`, { at: now, reasonCode: blocked.code, summary: blocked.reason, owner, retryable: false, evidenceIds: [] })
       transition(core, tx, scope, incident, {
         to: "ESCALATED", blocker: `${label} blocked: ${blocked.reason}`, owner, mode: "system", stage: "execution",
@@ -151,11 +165,30 @@ function executeTx(core: CoreRuntime, options: WorkflowOptions, tx: Sql, job: Jo
     actionId: action.id, approvalId, evidenceIds: [],
   })
   tx.run("UPDATE wf_actions SET audit_id = COALESCE(audit_id, ?) WHERE id = ?", [auditId, action.id])
+  {
+    const wc = WRITE_CALLS[action.kind] ?? { system: "Simulator", method: "POST", endpoint: "/apply" }
+    // Show order references (not opaque ids) for webhook resends.
+    const refs = new Map<string, string>()
+    if (action.kind === "RESEND_WEBHOOK") for (const o of core.evidence.read(tx, scope, { kind: "order", ids: targets, limit: 200 })) refs.set(o.id, String(o.details.orderRef ?? o.id))
+    const shown = (id: string) => refs.get(id) ?? id
+    const args = parseJson<Record<string, unknown>>(action.args, {})
+    addProcessLog(tx, scope, `execute:${action.id}:applied`, {
+      at: now, stepId: ACT_STEP[action.kind] ?? "act", kind: "call", system: wc.system, method: wc.method, endpoint: wc.endpoint,
+      request: { actionId: action.id, ...args, targets: sampleList(targets.map(shown)), targetCount: targets.length, approvalId },
+      response: {
+        accepted: okCount, rejected: results.length - okCount,
+        results: sampleList(results.map((r) => ({ target: shown(r.targetId), ok: r.ok, reason: r.reason }))),
+      },
+      httpStatus: okCount === results.length ? 200 : okCount === 0 ? 409 : 207, outcome: okCount === results.length ? "OK" : "FAILED",
+      summary: `${label}: ${okCount}/${results.length} targets accepted. Write only; recovery is not claimed until the verifier checks.`,
+      actionId: action.id, evidenceIds: [],
+    })
+  }
   transition(core, tx, scope, incident, {
     to: "VERIFYING", mode: "system", stage: "execution", reason: `${label} executed (${status}); awaiting fresh observations.`,
     opKey: `execute:${action.id}:verifying`, auditId,
   })
-  saveState(tx, scope, now, { scenario: incident.card.scenario, phase: action.kind === "MOCK_RESTART_DEVICE" ? "RESTART" : action.kind === "LINK_SUPPORT_TICKETS" ? "LINKING" : "SYNC" })
+  saveState(tx, scope, now, { scenario: incident.card.scenario, phase: action.kind === "MOCK_RESTART_DEVICE" ? "RESTART" : action.kind === "LINK_SUPPORT_TICKETS" ? "LINKING" : action.kind === "RESEND_WEBHOOK" ? "RESEND" : "SYNC" })
   core.jobs.enqueue(tx, {
     ...scope, key: `verify:${action.id}:1`, kind: "workflow.verify", runAfter: addMs(now, options.verifyIntervalMs),
     payload: { actionId: action.id, round: 1 },

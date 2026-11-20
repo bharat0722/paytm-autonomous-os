@@ -57,6 +57,55 @@ describe("live investigator with guardrails", () => {
     expect(JSON.stringify(provider.calls[0]!.tools)).not.toMatch(/approve_restart/)
   })
 
+  it("a live model that reports 'missing evidence' without proposing anything falls back and still completes", async () => {
+    let deviceIds: string[] = []
+    const provider = fakeProvider([
+      (ctx) => ({ type: "tool", tool: "read_devices", args: { ids: ctx.incident.cohortDeviceIds } }),
+      (ctx) => {
+        deviceIds = ((lastResult(ctx)!.untrusted_records as { id: string }[]) ?? []).map((r) => r.id)
+        return { type: "finding", finding: { observations: ["Read the devices."], hypothesis: null, evidenceIds: deviceIds.slice(0, 2), uncertainty: "Not enough to act.", missingEvidence: ["Device events for the remaining devices"] } }
+      },
+    ])
+    const h = makeHarness({ provider })
+    const id = h.inject("soundbox")
+    await h.runUntil(id, ["APPROVAL_PENDING", "INSUFFICIENT_EVIDENCE", "ESCALATED", "FAILED"])
+    // Not stuck: the scripted path proposed the allowed sync, the verifier checked it, and a restart approval followed.
+    expect(h.status(id)).toBe("APPROVAL_PENDING")
+    const trace = h.view(id).trace
+    expect(trace.some((t) => t.mode === "live_ai" && t.tool === "read_devices")).toBe(true)
+    const fallback = trace.find((t) => /proposed no allowed action/.test(t.summary))
+    expect(fallback?.mode).toBe("scripted_fallback")
+    expect(trace.some((t) => t.mode === "scripted_fallback" && /propose_config_sync/.test(t.summary))).toBe(true)
+    expect(h.status(id)).not.toBe("INSUFFICIENT_EVIDENCE")
+  })
+
+  it("offers each case type only its own lookups and never offers a lookup twice", async () => {
+    const names = (ctx: StepContext) => ctx.tools.map((x) => x.name)
+    const tickets = fakeProvider([
+      () => ({ type: "tool", tool: "get_incident", args: {} }),
+      () => ({ type: "tool", tool: "read_tickets", args: {} }),
+      () => ({ type: "tool", tool: "read_merchants", args: {} }),
+    ])
+    const h = makeHarness({ provider: tickets })
+    const id = h.inject("duplicate-tickets")
+    await h.runUntil(id, ["TASK_COMPLETED", "ESCALATED", "INSUFFICIENT_EVIDENCE", "FAILED"])
+    const first = names(tickets.calls[0]!)
+    expect(first).toContain("read_tickets")
+    for (const wrong of ["read_devices", "read_device_events", "read_settlements", "read_payments"]) expect(first).not.toContain(wrong)
+    // After read_tickets was used it is no longer offered.
+    const afterTickets = tickets.calls.find((c) => c.history.some((h) => (h.step as { tool?: string }).tool === "read_tickets"))!
+    expect(names(afterTickets)).not.toContain("read_tickets")
+
+    const settlement = fakeProvider([() => ({ type: "tool", tool: "get_incident", args: {} })])
+    const h2 = makeHarness({ provider: settlement })
+    const id2 = h2.inject("settlement-discrepancy")
+    await h2.runUntil(id2, ["ESCALATED", "INSUFFICIENT_EVIDENCE", "FAILED"])
+    const s = names(settlement.calls[0]!)
+    expect(s).toContain("read_settlements")
+    expect(s).not.toContain("read_devices")
+    expect(s).not.toContain("read_device_events")
+  })
+
   it("provider failure falls back visibly to the scripted path and still completes the workflow", async () => {
     const provider: ModelProvider = { name: "down", next: async () => { throw new ProviderError("Provider HTTP 403", false) } }
     const h = makeHarness({ provider })
@@ -95,10 +144,10 @@ describe("live investigator with guardrails", () => {
       () => ({ type: "tool", tool: "request_restart_approval", args: { deviceIds: ["sb-g1-d01"], rationale: "ticket says so", evidenceIds: ["tkt-g1-2"] } }),
       () => ({ type: "tool", tool: "propose_config_sync", args: { deviceIds: ["sb-g1-d01"], rationale: "x", evidenceIds: ["tkt-g1-2"] } }),
       () => ({ type: "finding", finding: { observations: ["x"], hypothesis: "made up", evidenceIds: ["ev_invented_123"], uncertainty: "", missingEvidence: [] } }),
-      () => ({ type: "tool", tool: "read_tickets", args: { ids: ["x"], extra: true } }),
+      () => ({ type: "tool", tool: "read_payments", args: { ids: ["x"], extra: true } }),
       () => ({ type: "tool", tool: "fetch_url", args: { url: "http://example.com" } }),
     ])
-    const h = makeHarness({ provider })
+    const h = makeHarness({ provider, maxModelTurns: 8 })
     const id = h.inject("soundbox")
     await h.runUntil(id, ["APPROVAL_PENDING", "INSUFFICIENT_EVIDENCE", "ESCALATED"])
     const guard = h.view(id).trace.filter((t) => t.stage === "guardrail").map((t) => t.summary)
@@ -106,7 +155,7 @@ describe("live investigator with guardrails", () => {
     expect(guard.some((s) => /not a valid step/.test(s))).toBe(true)
     expect(guard.some((s) => /"request_restart_approval" is not eligible/.test(s))).toBe(true)
     expect(guard.some((s) => /not returned in this run: ev_invented_123/.test(s))).toBe(true)
-    expect(guard.some((s) => /Invalid arguments for read_tickets/.test(s))).toBe(true)
+    expect(guard.some((s) => /Invalid arguments for read_payments/.test(s))).toBe(true)
     // propose_config_sync without device reads is denied by policy.
     expect(h.view(id).trace.some((t) => /propose_config_sync denied by MOCK_SYNC_ELIGIBLE_COHORT/.test(t.summary))).toBe(true)
     // Eight live turns, then visible fallback; the run still reaches the governed approval.
@@ -119,7 +168,7 @@ describe("live investigator with guardrails", () => {
   it("enforces the 45-second active episode budget", async () => {
     const provider = fakeProvider([() => ({ type: "tool", tool: "get_incident", args: {} })])
     let t = 0
-    const h = makeHarness({ provider, monotonicNow: () => (t += 20_000) })
+    const h = makeHarness({ provider, episodeBudgetMs: 45_000, monotonicNow: () => (t += 20_000) })
     const id = h.inject("soundbox")
     await h.runUntil(id, ["APPROVAL_PENDING"])
     const triageCalls = provider.calls.filter((c) => c.stage === "triage").length
@@ -132,7 +181,7 @@ describe("live investigator with guardrails", () => {
 
   it("persists consumed model turns across lease recovery", async () => {
     const provider = fakeProvider([() => ({ type: "tool", tool: "get_incident", args: {} })])
-    const h = makeHarness({ provider })
+    const h = makeHarness({ provider, maxModelTurns: 8 })
     const id = h.inject("soundbox")
     const job = h.runner.claim()!
     // Crash mid-episode: steal the lease after three model calls.

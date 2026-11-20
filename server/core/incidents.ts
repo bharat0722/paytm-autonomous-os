@@ -9,10 +9,15 @@ import type { Clock } from "./util.js"
 
 interface IncidentRow {
   id: string; generation: number; scenario: Scenario; title: string; severity: IncidentCard["severity"];
-  status: IncidentStatus; version: number; owner: string | null; blocker: string | null; updated_at: string
+  status: IncidentStatus; version: number; owner: string | null; blocker: string | null; updated_at: string;
+  correlation_json: string
 }
 
-const SELECT = "SELECT id, generation, scenario, title, severity, status, version, owner, blocker, updated_at FROM incidents"
+const SELECT = "SELECT id, generation, scenario, title, severity, status, version, owner, blocker, updated_at, correlation_json FROM incidents"
+
+function parseCorrelation(text: string): Record<string, unknown> {
+  try { return JSON.parse(text) as Record<string, unknown> } catch { return {} }
+}
 
 export function linkedMerchantIds(q: Sql, incidentId: string): string[] {
   return q.all<{ record_id: string }>(
@@ -43,7 +48,7 @@ function toCard(q: Sql, row: IncidentRow): IncidentCard {
 export function getIncident(q: Sql, scope: Scope): CoreIncident | null {
   const row = q.get<IncidentRow>(`${SELECT} WHERE id = ? AND generation = ?`, [scope.incidentId, scope.generation])
   if (!row) return null
-  return { card: toCard(q, row), devices: rosterDevices(q, row.id), blocker: row.blocker, owner: row.owner }
+  return { card: toCard(q, row), devices: rosterDevices(q, row.id), blocker: row.blocker, owner: row.owner, correlation: parseCorrelation(row.correlation_json) }
 }
 
 export function listIncidentCards(q: Sql, generation: number): IncidentCard[] {

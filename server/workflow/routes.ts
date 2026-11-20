@@ -9,6 +9,9 @@ import { ActionRequestBodySchema, ApprovalDecisionSchema, type Actor, type Appro
 import { requestAction, requestVerify } from "./requests.js"
 import { approvalView, decideApproval, listApprovals } from "./approvals.js"
 import { requireIncident } from "./machine.js"
+import { getPlaybook } from "./playbook.js"
+import { getRuns } from "./runs.js"
+import { DEFAULT_OPTIONS, type WorkflowOptions } from "./config.js"
 import { addAudit, getState } from "./store.js"
 import { WorkflowError, assertActiveGeneration, randomId } from "./util.js"
 
@@ -80,7 +83,9 @@ export function requestInvestigation(core: CoreRuntime, actor: Actor | null, gen
   })
 }
 
-export function registerWorkflowRoutes(core: CoreRuntime, router: Router, requireRole: (role: Role) => RequestHandler): void {
+const FALLBACK_OPTIONS = { ...DEFAULT_OPTIONS, investigatorMode: "scripted", provider: null, providerUnavailableReason: null } as WorkflowOptions
+
+export function registerWorkflowRoutes(core: CoreRuntime, router: Router, requireRole: (role: Role) => RequestHandler, options: WorkflowOptions = FALLBACK_OPTIONS): void {
   router.post("/incidents/:id/investigate", requireRole("operator"), wrap((req, res) => {
     const parsed = EmptyBody.safeParse(req.body && Object.keys(req.body).length === 0 ? undefined : req.body)
     if (!parsed.success) throw new WorkflowError(400, "INVALID_INPUT", "This request takes an empty body.")
@@ -102,6 +107,20 @@ export function registerWorkflowRoutes(core: CoreRuntime, router: Router, requir
     if (!parsed.success) throw new WorkflowError(400, "INVALID_INPUT", "This request takes an empty body.")
     const result = requestVerify(core, actorOf(res), generationOf(res), String(req.params.id))
     res.status(result.queued ? 202 : 200).json({ data: result })
+  }))
+
+  // The process this incident follows and every system call it made (read-only).
+  router.get("/incidents/:id/playbook", wrap((req, res) => {
+    if (!actorOf(res)) throw new WorkflowError(401, "UNAUTHENTICATED", "Sign in to view the process.")
+    const data = core.db.read((q) => getPlaybook(core, q, { generation: generationOf(res), incidentId: String(req.params.id) }))
+    res.status(200).json({ data })
+  }))
+
+  // Background jobs, investigator runs and the schedules and limits behind this incident (read-only).
+  router.get("/incidents/:id/runs", wrap((req, res) => {
+    if (!actorOf(res)) throw new WorkflowError(401, "UNAUTHENTICATED", "Sign in to view runs.")
+    const data = core.db.read((q) => getRuns(core, q, { generation: generationOf(res), incidentId: String(req.params.id) }, options))
+    res.status(200).json({ data })
   }))
 
   router.get("/approvals", wrap((_req, res) => {

@@ -123,7 +123,7 @@ describe("multiple scheduled detection jobs", () => {
     const op = await signIn(core, "operator")
     const ap = await signIn(core, "approver")
     const jobs = DetectionJobsViewSchema.parse((await op.agent.get("/api/v1/detection/jobs")).body.data)
-    expect(jobs.jobs.map((j) => j.id)).toEqual(["voice-alert-sweep", "audio-codec-monitor", "connectivity-monitor", "support-dedupe", "settlement-recon"])
+    expect(jobs.jobs.map((j) => j.id)).toEqual(["voice-alert-sweep", "audio-codec-monitor", "connectivity-monitor", "pg-webhook-monitor", "support-dedupe", "settlement-recon"])
     expect(jobs.jobs.every((j) => j.nextFireAt > jobs.now && j.lastRun === null)).toBe(true)
 
     const expected: Record<string, { total: number; afterSync: number; restart: number }> = {

@@ -8,15 +8,15 @@ import type { WorkflowOptions } from "../config.js"
 import { FIELD_OWNER, SETTLEMENT_OWNER, transition } from "../machine.js"
 import { evaluateAction, type PolicyDecision } from "../policy.js"
 import {
-  addAudit, addEscalation, addTrace, deviceChecks, getEpisode, insertAction, latestVerification, listRetrieved,
+  addAudit, addEscalation, addProcessLog, addTrace, deviceChecks, getEpisode, insertAction, latestVerification, listRetrieved,
   listSteps, saveFinding, saveState, type EpisodeRow,
 } from "../store.js"
+import { describeProposal, describeRead, readStepId, sampleList } from "../process.js"
 import { FencedError, guardJob, opaqueId, parseJson, scopeOf, truncate } from "../util.js"
 import { ProviderError, StepSchema, type ModelProvider, type Stage, type Step, type StepContext } from "./provider.js"
 import { scriptedStep } from "./scripted.js"
 import { TOOLS, describeTools, eligibleTools, runTool, type Proposal, type Snapshot, type ToolOutcome, type ToolState } from "./tools.js"
 
-const PER_CALL_TIMEOUT_MS = 20_000
 const EVIDENCE_KINDS = new Set(["device", "device_event", "ticket", "payment", "settlement", "merchant"])
 
 export function makeInvestigateHandler(core: CoreRuntime, options: WorkflowOptions) {
@@ -84,6 +84,19 @@ async function investigate(core: CoreRuntime, options: WorkflowOptions, job: Job
           : `Investigator ${stage} episode started in scripted fallback: ${initialReason}.`,
       })
       saveState(tx, scope, now, { scenario: incident.card.scenario, phase: stage === "triage" ? "TRIAGE" : "RESTART_PROPOSAL" })
+      if (stage === "triage") {
+        const c = (incident.correlation ?? {}) as Record<string, unknown>
+        addProcessLog(tx, scope, "detect", {
+          at: now, stepId: "detect", kind: "result", system: "Correlation engine", method: "RULE", endpoint: "correlate()",
+          request: { rule: c.rule ?? null, windowMinutes: c.windowMinutes ?? null, minDistinctMerchants: c.minMerchants ?? null },
+          response: {
+            sharedSignature: c.shared ?? c.rule ?? null, window: c.window ?? null,
+            items: c.deviceCount ?? c.orderCount ?? c.ticketCount ?? null, merchants: c.merchantCount ?? null,
+            excludedAsDifferentCause: c.excluded ?? [], note: c.note ?? null,
+          },
+          httpStatus: null, outcome: "OK", summary: `Grouped related signals into one case: ${incident.card.title}`,
+        })
+      }
     }
     return { ep, incident }
   })
@@ -116,7 +129,17 @@ async function investigate(core: CoreRuntime, options: WorkflowOptions, job: Job
   })
 
   // 3. Step loop.
+  let scriptHandover = false
   for (;;) {
+    // The script must not trust a live model's empty reads: re-read anything that came back with no records.
+    if (ep.mode !== "live_ai" && !scriptHandover) {
+      scriptHandover = true
+      const kindOf: Record<string, string> = { read_devices: "device", read_device_events: "device_event", read_merchants: "merchant", read_tickets: "ticket",
+        read_payments: "payment", read_settlements: "settlement", read_orders: "order", read_webhook_log: "webhook_attempt", check_pg_status: "pg_transaction" }
+      for (const [tool, kind] of Object.entries(kindOf)) {
+        if (state.used.has(tool) && ![...state.retrieved.values()].some((e) => e.kind === kind)) state.used.delete(tool)
+      }
+    }
     const eligible = eligibleTools(state, stage)
     let raw: unknown
     if (ep.mode === "live_ai" && options.provider) {
@@ -140,7 +163,7 @@ async function investigate(core: CoreRuntime, options: WorkflowOptions, job: Job
       }
       const t0 = options.monotonicNow()
       try {
-        raw = await callProvider(options.provider, ctx, Math.max(1, options.episodeBudgetMs - ep.active_ms))
+        raw = await callProvider(options.provider, ctx, Math.max(1, options.episodeBudgetMs - ep.active_ms), options.modelCallTimeoutMs)
       } catch (err) {
         ep = addActive(core, job, ep, options.monotonicNow() - t0)
         const reason = err instanceof ProviderError ? err.message : `Provider error (${(err as Error).name})`
@@ -149,7 +172,8 @@ async function investigate(core: CoreRuntime, options: WorkflowOptions, job: Job
       }
       ep = addActive(core, job, ep, options.monotonicNow() - t0)
     } else {
-      if (ep.steps_used >= options.maxScriptedSteps) {
+      // Only the script's own steps count against its budget; the live model's turns were already limited separately.
+      if (ep.steps_used - ep.turns_used >= options.maxScriptedSteps) {
         failEpisode(core, job, scope, ep, stage, "Investigation step budget exhausted without a finding.")
         return
       }
@@ -166,6 +190,12 @@ async function investigate(core: CoreRuntime, options: WorkflowOptions, job: Job
       const problem = validateFinding(state, step.finding)
       if (problem) {
         ep = recordRejected(core, job, scope, ep, history, step, problem)
+        continue
+      }
+      // A live model that finishes without proposing any allowed action would leave the case stuck at
+      // "more evidence needed". Hand the same case to the scripted path instead, visibly and with the reason.
+      if (ep.mode === "live_ai" && !state.proposal) {
+        ep = switchToFallback(core, job, scope, ep, "live model reported a finding but proposed no allowed action, so the scripted path completes the safe step")
         continue
       }
       finalize(core, options, job, scope, stage, state, ep, step.finding)
@@ -194,10 +224,10 @@ function ensureEpisodeRow(core: CoreRuntime, tx: Parameters<Parameters<CoreRunti
   return getEpisode(tx, id)!
 }
 
-async function callProvider(provider: ModelProvider, ctx: StepContext, remainingMs: number): Promise<unknown> {
+async function callProvider(provider: ModelProvider, ctx: StepContext, remainingMs: number, perCallMs: number): Promise<unknown> {
   const started = Date.now()
   for (let attempt = 0; attempt < 2; attempt++) {
-    const budget = Math.min(PER_CALL_TIMEOUT_MS, remainingMs - (Date.now() - started))
+    const budget = Math.min(perCallMs, remainingMs - (Date.now() - started))
     if (budget <= 0) throw new ProviderError("Provider call exceeded the episode budget", false)
     const ac = new AbortController()
     let timer: NodeJS.Timeout | undefined
@@ -269,6 +299,11 @@ function recordStep(
     addTrace(tx, scope, `${ep.episode_key}:step:${stepNo}`, {
       at: now, mode: ep.mode, stage: kind === "read" ? "evidence" : "proposal", summary: o.summary, tool, evidenceIds: o.evidenceIds,
     })
+    const args = step.type === "tool" ? step.args : {}
+    const call = kind === "read"
+      ? describeRead(tool, args, o.newEvidence, o.summary, o.ok, ep.stage === "continuation" ? "continuation" : "triage", o.modelResult)
+      : describeProposal(tool, args, o.modelResult, o.ok, o.summary)
+    addProcessLog(tx, scope, `${ep.episode_key}:step:${stepNo}`, { at: now, ...call, summary: o.summary, evidenceIds: o.evidenceIds })
     tx.run("UPDATE wf_episodes SET steps_used = steps_used + 1 WHERE id = ?", [ep.id])
     return getEpisode(tx, ep.id)!
   })
@@ -287,6 +322,11 @@ function recordRejected(core: CoreRuntime, job: Job, scope: Scope, ep: EpisodeRo
     )
     addTrace(tx, scope, `${ep.episode_key}:step:${stepNo}`, {
       at: core.clock.now(), mode: ep.mode, stage: "guardrail", summary: `Rejected step: ${truncate(error, 240)}`,
+    })
+    addProcessLog(tx, scope, `${ep.episode_key}:step:${stepNo}`, {
+      at: core.clock.now(), stepId: readStepId(ep.stage === "continuation" ? "continuation" : "triage"), kind: "decision", system: "Guardrail",
+      method: "CATCH", endpoint: "validateStep", request: truncate(JSON.stringify(step ?? null), 400), response: { error, handled: "the AI was asked again" }, outcome: "INFO",
+      summary: `Guardrail caught a malformed AI output and asked again (${truncate(error, 160)})`,
     })
     tx.run("UPDATE wf_episodes SET steps_used = steps_used + 1 WHERE id = ?", [ep.id])
     return getEpisode(tx, ep.id)!
@@ -360,15 +400,24 @@ function finalize(
       evidenceIds: finding.evidenceIds,
     })
 
+    addProcessLog(tx, scope, `${ep.episode_key}:finding`, {
+      at: now, stepId: readStepId(stage), kind: "result", system: `Investigator (${mode === "live_ai" ? "AI model" : "scripted fallback"})`, method: "FINDING",
+      endpoint: "finding", request: { citedEvidence: finding.evidenceIds.length },
+      response: { hypothesis: finding.hypothesis, observations: finding.observations, uncertainty: finding.uncertainty, missingEvidence: finding.missingEvidence },
+      httpStatus: null, outcome: "INFO", summary: `Finding: ${truncate(finding.hypothesis ?? "no hypothesis", 200)}`, evidenceIds: finding.evidenceIds,
+    })
+
     const p = state.proposal
     let decision: PolicyDecision | null = null
-    if (p && (p.kind === "sync" || p.kind === "restart" || p.kind === "link")) {
+    if (p && (p.kind === "sync" || p.kind === "restart" || p.kind === "link" || p.kind === "resend")) {
       const latest = latestVerification(tx, scope, { finalOnly: true })
       decision = evaluateAction(
         { incident, retrieved: state.retrieved, latestChecks: latest ? deviceChecks(latest) : null, existingRestartApprovals: countRestartApprovals(tx, scope) },
         p.kind === "link"
           ? { kind: "LINK_SUPPORT_TICKETS", groups: p.groups }
-          : { kind: p.kind === "sync" ? "MOCK_SYNC_DEVICE_CONFIG" : "MOCK_RESTART_DEVICE", targetIds: p.decision.targetIds },
+          : p.kind === "resend"
+            ? { kind: "RESEND_WEBHOOK", targetIds: p.decision.targetIds }
+            : { kind: p.kind === "sync" ? "MOCK_SYNC_DEVICE_CONFIG" : "MOCK_RESTART_DEVICE", targetIds: p.decision.targetIds },
       )
     }
     let outcome = "NO_ACTION"
@@ -406,6 +455,12 @@ function finalize(
           recoveredBefore: latest.recovered, total: latest.total,
         })
         tx.run("UPDATE wf_audit SET approval_id = ? WHERE id = ?", [approval.id, auditId])
+        addProcessLog(tx, scope, `approval:${approval.id}:requested`, {
+          at: now, stepId: "approve", kind: "wait", system: "Approval Center", method: "REQUEST", endpoint: "/approvals",
+          request: { action: "MOCK_RESTART_DEVICE", targets: sampleList(decision.targetIds), rule: decision.ruleId, expiresInSeconds: Math.round(options.approvalTtlMs / 1000) },
+          response: { approvalId: approval.id, status: "PENDING", expiresAt: approval.expires_at, proposalRevision: approval.proposal_revision },
+          httpStatus: 202, outcome: "INFO", summary: `Waiting for a human approver to decide on ${decision.targetIds.length} devices.`, actionId: a.id, evidenceIds: p.evidenceIds,
+        })
         transition(core, tx, scope, incident, {
           to: "APPROVAL_PENDING", blocker: `Awaiting human approval to mock-restart ${decision.targetIds.length} devices (${latest.recovered}/${latest.total} recovered).`,
           mode, stage: "decision", reason: `Restricted restart proposed under ${decision.ruleId} (${modeNote(ep)}).`, opKey: `${ep.episode_key}:restart`, auditId, evidenceIds: p.evidenceIds,
@@ -429,12 +484,33 @@ function finalize(
         core.jobs.enqueue(tx, { ...scope, key: `execute:${a.id}`, kind: "workflow.execute", runAfter: now, payload: { actionId: a.id } })
         outcome = "LINK_QUEUED"
       }
+    } else if (p?.kind === "resend" && decision?.allowed) {
+      const auditId = addAudit(tx, scope, `${ep.episode_key}:resend-proposed`, {
+        at: now, actor, event: "ACTION_AUTHORIZED", summary: `Policy ${decision.ruleId} authorized resending the webhook for ${decision.targetIds.length} orders.`,
+        evidenceIds: p.evidenceIds,
+      })
+      const a = insertAction(tx, scope, {
+        opKey: "resend", kind: "RESEND_WEBHOOK", targetIds: decision.targetIds, args: { event: "TXN_SUCCESS", mode: "mock" },
+        ruleId: decision.ruleId, summary: truncate(p.rationale, 400), requiresApproval: false, evidenceIds: p.evidenceIds, auditId, at: now,
+      })
+      if (a.created) {
+        transition(core, tx, scope, incident, { to: "ACTION_RUNNING", mode, stage: "decision", reason: `Webhook resend authorized by ${decision.ruleId} (${modeNote(ep)}).`, opKey: `${ep.episode_key}:resend`, auditId, evidenceIds: p.evidenceIds })
+        saveState(tx, scope, now, { scenario: incident.card.scenario, phase: "RESEND" })
+        core.jobs.enqueue(tx, { ...scope, key: `execute:${a.id}`, kind: "workflow.execute", runAfter: now, payload: { actionId: a.id } })
+        outcome = "RESEND_QUEUED"
+      }
     } else if (p?.kind === "handoff") {
       const auditId = addAudit(tx, scope, `${ep.episode_key}:handoff`, {
         at: now, actor, event: "SETTLEMENT_HANDOFF", summary: `Factual handoff to ${SETTLEMENT_OWNER}. Settlement data is read-only; no financial change was made.`,
         evidenceIds: p.evidenceIds,
       })
       addEscalation(tx, scope, `${ep.episode_key}:handoff`, { at: now, reasonCode: "SETTLEMENT_DISCREPANCY", summary: p.summary, owner: SETTLEMENT_OWNER, retryable: false, evidenceIds: p.evidenceIds })
+      addProcessLog(tx, scope, `${ep.episode_key}:handoff`, {
+        at: now, stepId: "handoff", kind: "call", system: "Escalation queue", method: "CREATE", endpoint: "/escalations",
+        request: { owner: SETTLEMENT_OWNER, reasonCode: "SETTLEMENT_DISCREPANCY", financialChange: "none (read-only)" },
+        response: { owner: SETTLEMENT_OWNER, status: "OPEN", summary: truncate(p.summary, 400), evidenceCount: p.evidenceIds.length },
+        httpStatus: 201, outcome: "OK", summary: `Handed the evidence packet to ${SETTLEMENT_OWNER}. No settlement record was changed.`, evidenceIds: p.evidenceIds,
+      })
       transition(core, tx, scope, incident, {
         to: "ESCALATED", blocker: truncate(p.summary, 600), owner: SETTLEMENT_OWNER, mode, stage: "handoff",
         reason: `Settlement discrepancy handed off to ${SETTLEMENT_OWNER} (${modeNote(ep)}).`, opKey: `${ep.episode_key}:handoff`, auditId, evidenceIds: p.evidenceIds,

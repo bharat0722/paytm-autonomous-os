@@ -21,6 +21,7 @@ function loadCorrelation(q: Sql, scope: Scope): { c: Correlation; scenario: stri
 
 function evidenceKind(scenario: string): string {
   if (scenario === "soundbox") return "device_event"
+  if (scenario === "order-unpaid") return "order"
   if (scenario === "duplicate-tickets") return "ticket"
   if (scenario === "payment-confirmation") return "payment_signal"
   return "settlement"
@@ -69,6 +70,7 @@ export function detectionEntries(q: Sql, scope: Scope): { trace: TraceEntry; aud
   const excludedCount = g.excluded.reduce((n, e) => n + e.count, 0)
   const fingerprint = g.signals.map((s) => s.value).join(" · ")
   const what = loaded.scenario === "soundbox" ? `${g.counts.records} notification failures on ${g.counts.devices} devices`
+    : loaded.scenario === "order-unpaid" ? `${g.counts.records} paid orders that still show unpaid`
     : loaded.scenario === "duplicate-tickets" ? `${g.counts.records} support tickets`
     : loaded.scenario === "payment-confirmation" ? `${g.counts.records} payment and order observations`
     : `${g.counts.records} short settlements`

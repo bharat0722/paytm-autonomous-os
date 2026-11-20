@@ -41,6 +41,11 @@ function Login({ initialRole, onSignIn, button = "Sign in" }: {
   </form>
 }
 
+const navTips: Record<string, string> = {
+  mission: "The command center: every merchant problem caught, what was fixed automatically, and what needs a person.",
+  incident: "One case end to end: what broke, how the AI fixed it, and the proof it worked.",
+  approvals: "The human-in-the-loop gate. Risky fixes wait here for sign-off. Nothing risky runs without it.",
+}
 const nav: { view: "mission" | "incident" | "approvals"; name: string; icon: IconName }[] = [
   { view: "mission", name: "Overview", icon: "grid" },
   { view: "incident", name: "Incidents", icon: "incident" },
@@ -63,7 +68,7 @@ function WorkspaceFrame({ view, session, lastIncident, onSwitch, onReset, childr
         <span className="brand-icon"><Icon name="brand" size={23}/></span>
         <strong>Merchant<span>Reliability OS</span></strong>
       </a>
-      <nav aria-label="Workspace">{nav.map((item) => <a key={item.view} href={names[item.view]} aria-current={view === item.view ? "page" : undefined}>
+      <nav aria-label="Workspace">{nav.map((item) => <a key={item.view} href={names[item.view]} aria-current={view === item.view ? "page" : undefined} data-tip={navTips[item.view]} data-tip-pos="right">
         <Icon name={item.icon}/><span>{item.name}</span>
       </a>)}</nav>
       <div className="sidebar-note"><Icon name="lock" size={15}/><span>Merchant operations<br/>Device · Support · Settlement</span></div>
@@ -72,10 +77,10 @@ function WorkspaceFrame({ view, session, lastIncident, onSwitch, onReset, childr
       <header className="topbar">
         <div className="breadcrumb"><span>Workspace</span><Icon name="chevron" size={13}/><strong>{nav.find((item) => item.view === view)?.name}</strong></div>
         <div className="top-actions">
-          {view !== "mission" && role === "operator" && <button className="button button--quiet top-reset" onClick={onReset}><Icon name="reset" size={16}/>Reset sandbox</button>}
-          <span className="env-badge" title="Isolated sandbox environment"><i aria-hidden="true"/>Sandbox</span>
+          {view !== "mission" && role === "operator" && <button className="button button--quiet top-reset" onClick={onReset} data-tip="Wipe the demo data and start a clean run. For rehearsals." data-tip-pos="bottom-end"><Icon name="reset" size={16}/>Reset sandbox</button>}
+          <span className="env-badge" data-tip="Demo environment: synthetic data only. No real Paytm system, device or money is touched." data-tip-pos="bottom-end"><i aria-hidden="true"/>Sandbox</span>
           <span className="role-label"><Icon name="user" size={16}/>{role ? label(role) : "Not signed in"}</span>
-          {role && <button className="button button--quiet switch-role" onClick={onSwitch}>Switch role</button>}
+          {role && <button className="button button--quiet switch-role" onClick={onSwitch} data-tip="Two roles, separate people: the Operator runs cases, the Approver signs off risky fixes. Separation of duties." data-tip-pos="bottom-end">Switch role</button>}
         </div>
       </header>
       <main className="main-content" id="main-content" tabIndex={-1}>{children}</main>
@@ -150,6 +155,16 @@ export function App() {
     (signal) => api.incident(incidentId!, session!.generation, signal),
     (data) => isActive(data.incident.status), reportReadError,
   )
+  const playbook = useResource(
+    sessionKey && incidentId ? sessionKey + "/playbook/" + incidentId : "",
+    (signal) => api.playbook(incidentId!, session!.generation, signal),
+    (data) => data.steps.some(({ status }) => status === "active" || status === "waiting"), reportReadError,
+  )
+  const runs = useResource(
+    sessionKey && incidentId ? sessionKey + "/runs/" + incidentId : "",
+    (signal) => api.runs(incidentId!, session!.generation, signal),
+    (data) => data.jobs.some(({ status }) => status === "PENDING" || status === "LEASED"), reportReadError,
+  )
   const metrics = useResource(
     sessionKey && route.view === "mission" ? sessionKey + "/metrics" : "",
     (signal) => api.metrics(session!.generation, signal), () => false, reportReadError,
@@ -191,6 +206,8 @@ export function App() {
   function refreshViews() {
     dashboard.refresh()
     incident.refresh()
+    playbook.refresh()
+    runs.refresh()
     approvals.refresh()
   }
 
@@ -280,7 +297,7 @@ export function App() {
         <div className="page-heading mission-heading">
           <div><h1>Operations overview</h1><p>Merchant device, support and settlement incidents across all zones.</p></div>
           {canOperate && <div className="mission-controls">
-            <button className="button button--quiet" onClick={() => { setError(undefined); setDialog("reset") }} disabled={Boolean(busy)}><Icon name="reset" size={16}/> Reset sandbox</button>
+            <button className="button button--quiet" onClick={() => { setError(undefined); setDialog("reset") }} disabled={Boolean(busy)} data-tip="Wipe the demo data and start a clean run. For rehearsals." data-tip-pos="bottom"><Icon name="reset" size={16}/> Reset sandbox</button>
           </div>}
         </div>
         {dashboard.error && <InlineError problem={dashboard.error} retry={dashboard.refresh}/>}
@@ -298,7 +315,7 @@ export function App() {
           The incident may belong to an earlier sandbox run.
         </EmptyState></div>}
         {incident.loading && <Skeleton text="Loading incident evidence…"/>}
-        {incident.data && <WarRoom key={sessionKey + incidentId} data={incident.data} deepEvidence={route.evidenceId}
+        {incident.data && <WarRoom key={sessionKey + incidentId} data={incident.data} playbook={playbook.data} runs={runs.data} deepEvidence={route.evidenceId}
           resuming={busy === "resume"} canResume={Boolean(canOperate && (incident.data.incident.status === "INSUFFICIENT_EVIDENCE" ||
             (incident.data.incident.status === "FAILED" && incident.data.blocker?.includes("Retryable:"))))}
           resume={() => void operate("resume", (scope) => api.investigate(scope, incidentId), () => setNotice("Investigation queued."))}/>}

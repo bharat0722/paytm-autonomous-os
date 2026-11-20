@@ -6,6 +6,8 @@ import {
   type SessionView,
 } from "../../../shared/contracts/http.js"
 
+import { PlaybookViewSchema, RunsViewSchema } from "../../../shared/contracts/http.js"
+
 export class ApiProblem extends Error {
   constructor(
     public readonly code: string,
@@ -84,6 +86,10 @@ export function createApi(fetcher: typeof fetch = fetch) {
     incident: (id: string, generation: number, signal: AbortSignal) =>
       scopedRead("/incidents/" + encodeURIComponent(id), IncidentViewSchema, generation, signal),
     approvals: (generation: number, signal: AbortSignal) => scopedRead("/approvals", ApprovalQueueSchema, generation, signal),
+    playbook: (id: string, generation: number, signal: AbortSignal) =>
+      scopedRead("/incidents/" + encodeURIComponent(id) + "/playbook", PlaybookViewSchema, generation, signal),
+    runs: (id: string, generation: number, signal: AbortSignal) =>
+      scopedRead("/incidents/" + encodeURIComponent(id) + "/runs", RunsViewSchema, generation, signal),
     metrics: (generation: number, signal: AbortSignal) => scopedRead("/metrics", MetricsViewSchema, generation, signal),
     jobs: (generation: number, signal: AbortSignal) => scopedRead("/detection/jobs", DetectionJobsViewSchema, generation, signal),
     runJob: (session: SessionView, jobId: string, body: DemoInject) =>

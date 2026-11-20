@@ -68,6 +68,38 @@ export function applySimulation(tx: Sql, clock: Clock, scope: Scope, input: Simu
     return results
   }
 
+  if (input.kind === "RESEND_WEBHOOK") {
+    // Re-delivers the final-status webhook for each order. The merchant endpoint either accepts it (order becomes PAID)
+    // or still rejects it (order stays UNPAID). No money moves.
+    const linked = new Set(tx.all<{ record_id: string }>("SELECT record_id FROM incident_evidence WHERE incident_id = ? AND kind = 'order'", [scope.incidentId]).map((r) => r.record_id))
+    const appliedAt = advanceTelemetry(tx, scope.generation, 1_000)
+    targets.forEach((targetId, i) => {
+      let ok = false
+      let reason: string | null = null
+      const o = linked.has(targetId)
+        ? tx.get<{ id: string; merchant_status: string }>("SELECT id, merchant_status FROM orders WHERE id = ?", [targetId]) : undefined
+      if (!o) reason = "order not linked to this incident"
+      else if (o.merchant_status === "PAID") { ok = true; reason = "already PAID at merchant" }
+      else {
+        const works = tx.get<{ resend_works: number }>("SELECT resend_works FROM sim_order_behavior WHERE order_id = ?", [targetId])?.resend_works === 1
+        const n = tx.get<{ n: number }>("SELECT COALESCE(MAX(attempt_no), 0) + 1 AS n FROM webhook_attempts WHERE order_id = ?", [targetId])!.n
+        const attemptId = newId("wha")
+        tx.run("INSERT INTO webhook_attempts (id, generation, order_id, attempt_no, trigger, http_status, error, occurred_at) VALUES (?,?,?,?,?,?,?,?)",
+          [attemptId, scope.generation, targetId, n, "RESEND", works ? 200 : 502, works ? null : "Bad Gateway: merchant endpoint unreachable", appliedAt])
+        // The new attempt becomes part of the incident's evidence so the verifier and the War Room can read it.
+        tx.run("INSERT OR IGNORE INTO incident_evidence (incident_id, kind, record_id) VALUES (?, 'webhook_attempt', ?)", [scope.incidentId, attemptId])
+        if (works) {
+          tx.run("UPDATE orders SET merchant_status = 'PAID', paid_at = ? WHERE id = ?", [appliedAt, targetId])
+          ok = true; reason = "merchant endpoint returned HTTP 200; order marked PAID"
+        } else reason = "merchant endpoint returned HTTP 502; order still UNPAID"
+      }
+      tx.run(`INSERT INTO sim_applied (action_id, target_id, generation, incident_id, kind, ok, applied_at, prior_sequence, reason, ordinal)
+              VALUES (?,?,?,?,?,?,?,?,?,?)`, [input.actionId, targetId, scope.generation, scope.incidentId, input.kind, ok ? 1 : 0, appliedAt, watermark, reason, i])
+      results.push({ targetId, ok, appliedAt, priorSequence: watermark, reason })
+    })
+    return results
+  }
+
   if (input.kind === "LINK_SUPPORT_TICKETS") {
     const linked = new Set(tx.all<{ record_id: string }>("SELECT record_id FROM incident_evidence WHERE incident_id = ? AND kind = 'ticket'", [scope.incidentId]).map((r) => r.record_id))
     const appliedAt = advanceTelemetry(tx, scope.generation, 1_000)

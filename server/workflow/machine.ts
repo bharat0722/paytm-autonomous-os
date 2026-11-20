@@ -12,6 +12,7 @@ import { WorkflowError } from "./util.js"
  *            → ACTION_RUNNING (restart, approved) → VERIFYING → RESOLVED | ESCALATED
  *            APPROVAL_PENDING → ESCALATED on reject/expiry.
  * Scenario B: INVESTIGATING → ACTION_RUNNING (link) → VERIFYING → TASK_COMPLETED | ESCALATED
+ * Scenario D (orders): INVESTIGATING → ACTION_RUNNING (webhook resend) → VERIFYING → RESOLVED | ESCALATED (Payment Gateway Integration Support).
  * Scenario C: INVESTIGATING → ESCALATED (factual settlement handoff, read-only).
  * No evidence: INVESTIGATING → INSUFFICIENT_EVIDENCE (retryable → INVESTIGATING).
  */
@@ -64,3 +65,4 @@ export function requireIncident(core: CoreRuntime, q: Sql, scope: Scope): CoreIn
 export const FIELD_OWNER = "Field Operations"
 export const SETTLEMENT_OWNER = "Settlement Operations"
 export const SUPPORT_OWNER = "Merchant Support"
+export const PG_SUPPORT_OWNER = "Payment Gateway Integration Support"

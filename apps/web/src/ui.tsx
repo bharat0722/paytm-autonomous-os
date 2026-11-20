@@ -30,6 +30,9 @@ const paths = {
   bars: "M4 20v-5 M9 20v-9 M14 20V6 M19 20V3",
   list: "M8 6h12 M8 12h12 M8 18h12 M4 6h.01 M4 12h.01 M4 18h.01",
   link: "M10 13a4 4 0 0 0 5.7 0l3-3A4 4 0 0 0 13 4.3l-1 1 M14 11a4 4 0 0 0-5.7 0l-3 3A4 4 0 0 0 11 19.7l1-1",
+  eye: "M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6",
+  info: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20 M12 16v-4 M12 8h.01",
+  clock: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20 M12 6v6l4 2",
 } as const
 
 export type IconName = keyof typeof paths
@@ -118,4 +121,17 @@ export function CopyId({ value }: { value: string }) {
     <button className="icon-button" type="button" aria-label="Copy record ID" onClick={() => void copy()}><Icon name="copy" size={15}/></button>
     <span className="muted" ref={status} role="status" />
   </div>
+}
+
+export function EvidenceLinks({ ids, open }: { ids: string[]; open: (id: string) => void }) {
+  if (!ids.length) return null
+  return <details className="evidence-links">
+    <summary><Icon name="link" size={14}/> {ids.length} evidence {ids.length === 1 ? "reference" : "references"}</summary>
+    <ul>{ids.map((id) => <li key={id}><button className="text-button record-link" onClick={() => open(id)}>{id}</button></li>)}</ul>
+  </details>
+}
+
+/** Small "i" that explains a function in plain words on hover or keyboard focus. */
+export function Info({ text, pos = "bottom" }: { text: string; pos?: "top" | "bottom" }) {
+  return <span className="info" tabIndex={0} role="note" aria-label={text} data-tip={text} data-tip-pos={pos}><Icon name="info" size={15}/></span>
 }

@@ -193,3 +193,25 @@ CREATE TABLE IF NOT EXISTS wf_audit (
   evidence_ids TEXT    NOT NULL DEFAULT '[]',
   UNIQUE (generation, incident_id, op_key)
 );
+
+-- Process log: every system interaction the playbook made (what we hit, what we sent, what came back).
+CREATE TABLE IF NOT EXISTS wf_process_log (
+  id           TEXT    PRIMARY KEY,
+  generation   INTEGER NOT NULL,
+  incident_id  TEXT    NOT NULL,
+  op_key       TEXT    NOT NULL,
+  at           TEXT    NOT NULL,
+  step_id      TEXT    NOT NULL,
+  kind         TEXT    NOT NULL,
+  system       TEXT    NOT NULL,
+  method       TEXT    NOT NULL,
+  endpoint     TEXT    NOT NULL,
+  request      TEXT    NOT NULL,
+  response     TEXT    NOT NULL,
+  http_status  INTEGER,
+  outcome      TEXT    NOT NULL,
+  summary      TEXT    NOT NULL,
+  evidence_ids TEXT    NOT NULL DEFAULT '[]',
+  action_id    TEXT,
+  UNIQUE (generation, incident_id, op_key)
+);

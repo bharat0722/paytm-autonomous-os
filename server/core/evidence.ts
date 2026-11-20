@@ -48,7 +48,31 @@ const MAPPERS: Record<EvidenceView["kind"], Mapper> = {
   })),
   merchant: (q, ids) => q.all<{ id: string; name: string; city: string; category: string }>(
     `SELECT id, name, city, category FROM merchants WHERE id IN (${ph(ids.length)}) ORDER BY seed_ref`, ids
-  ).map((m) => ({ id: m.id, kind: "merchant", title: m.name, occurredAt: null, details: { city: m.city, category: m.category } }))
+  ).map((m) => ({ id: m.id, kind: "merchant", title: m.name, occurredAt: null, details: { city: m.city, category: m.category } })),
+  // Merchant-side order (what the merchant's own system shows).
+  order: (q, ids) => q.all<{ id: string; merchant_id: string; merchant_order_ref: string; amount_paise: number; merchant_status: string; created_at: string; paid_at: string | null }>(
+    `SELECT id, merchant_id, merchant_order_ref, amount_paise, merchant_status, created_at, paid_at FROM orders WHERE id IN (${ph(ids.length)}) ORDER BY created_at, id`, ids
+  ).map((o) => ({
+    id: o.id, kind: "order", title: `Order ${o.merchant_order_ref} · ${o.merchant_status} · ₹${rupees(o.amount_paise)}`, occurredAt: o.created_at,
+    details: { merchantId: o.merchant_id, orderRef: o.merchant_order_ref, amountRupees: rupees(o.amount_paise), merchantStatus: o.merchant_status, paidAt: o.paid_at }
+  })),
+  // Paytm-side transaction (what the Transaction Status API returns for the order).
+  pg_transaction: (q, ids) => q.all<{ id: string; order_id: string; txn_ref: string; bank_txn_ref: string | null; status: string; resp_code: string; resp_msg: string; payment_mode: string; occurred_at: string; merchant_order_ref: string }>(
+    `SELECT t.id, t.order_id, t.txn_ref, t.bank_txn_ref, t.status, t.resp_code, t.resp_msg, t.payment_mode, t.occurred_at, o.merchant_order_ref
+     FROM pg_transactions t JOIN orders o ON o.id = t.order_id WHERE t.id IN (${ph(ids.length)}) ORDER BY t.occurred_at, t.id`, ids
+  ).map((t) => ({
+    id: t.id, kind: "pg_transaction", title: `Status API ${t.status} · ${t.merchant_order_ref}`, occurredAt: t.occurred_at,
+    details: { orderId: t.order_id, orderRef: t.merchant_order_ref, txnRef: t.txn_ref, bankTxnRef: t.bank_txn_ref, pgStatus: t.status,
+      respCode: t.resp_code, respMsg: t.resp_msg, paymentMode: t.payment_mode }
+  })),
+  // Webhook delivery attempts to the merchant endpoint.
+  webhook_attempt: (q, ids) => q.all<{ id: string; order_id: string; attempt_no: number; trigger: string; http_status: number; error: string | null; occurred_at: string; merchant_order_ref: string }>(
+    `SELECT w.id, w.order_id, w.attempt_no, w.trigger, w.http_status, w.error, w.occurred_at, o.merchant_order_ref
+     FROM webhook_attempts w JOIN orders o ON o.id = w.order_id WHERE w.id IN (${ph(ids.length)}) ORDER BY w.occurred_at, w.id`, ids
+  ).map((w) => ({
+    id: w.id, kind: "webhook_attempt", title: `Webhook attempt ${w.attempt_no} → HTTP ${w.http_status} · ${w.merchant_order_ref}`, occurredAt: w.occurred_at,
+    details: { orderId: w.order_id, orderRef: w.merchant_order_ref, attemptNo: w.attempt_no, trigger: w.trigger, httpStatus: w.http_status, error: w.error }
+  })),
 }
 
 /** Reads only records linked to the incident in this generation. Unknown IDs are ignored. */
@@ -67,7 +91,7 @@ export function readEvidence(q: Sql, scope: Scope, request: ReadRequest): Eviden
 }
 
 export function readAllEvidence(q: Sql, scope: Scope): EvidenceView[] {
-  const kinds: EvidenceView["kind"][] = ["device", "device_event", "merchant", "ticket", "payment", "settlement", "payment_signal"]
+  const kinds: EvidenceView["kind"][] = ["device", "device_event", "merchant", "ticket", "payment", "settlement", "order", "pg_transaction", "webhook_attempt", "payment_signal"]
   return kinds.flatMap((kind) => readEvidence(q, scope, { kind, limit: CORE_DEFAULTS.evidenceReadMaxLimit }))
 }
 

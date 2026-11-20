@@ -12,6 +12,7 @@ export type Proposal =
   | { kind: "sync"; decision: PolicyDecision; rationale: string; evidenceIds: string[] }
   | { kind: "restart"; decision: PolicyDecision; rationale: string; evidenceIds: string[] }
   | { kind: "link"; decision: PolicyDecision; groups: LinkGroup[]; primaryTicketId: string; rationale: string; evidenceIds: string[] }
+  | { kind: "resend"; decision: PolicyDecision; rationale: string; evidenceIds: string[] }
   | { kind: "handoff"; summary: string; evidenceIds: string[] }
   | { kind: "escalate"; reason: string; evidenceIds: string[] }
 
@@ -81,8 +82,13 @@ function readTool(name: string, kind: EvidenceKind, label: string): ToolDef<Read
     argsDoc: '{"ids"?: string[], "limit"?: number (1-100)}',
     schema: ReadArgs,
     run(q, state, args) {
-      const records = state.core.evidence.read(q, state.scope, { kind, ids: args.ids, limit: args.limit ?? 100 })
+      let records = state.core.evidence.read(q, state.scope, { kind, ids: args.ids, limit: args.limit ?? 100 })
         .filter((r) => r.kind === kind)
+      // A model that guesses record ids gets nothing back and wrongly concludes there is no evidence.
+      // Reads are already scoped to this incident, so fall back to everything linked to it.
+      if (!records.length && args.ids?.length) {
+        records = state.core.evidence.read(q, state.scope, { kind, limit: args.limit ?? 100 }).filter((r) => r.kind === kind)
+      }
       const ids = records.map((r) => r.id)
       return {
         ok: true,
@@ -100,6 +106,12 @@ function readTool(name: string, kind: EvidenceKind, label: string): ToolDef<Read
       }
     },
   }
+}
+
+/** Asks the (simulated) Paytm Transaction Status API what Paytm recorded for the incident's orders. */
+function statusApiTool(): ToolDef<ReadArgsT> {
+  const base = readTool("check_pg_status", "pg_transaction", "Paytm transaction status")
+  return { ...base, description: "Ask the Paytm Transaction Status API (simulated) what Paytm recorded for the incident's orders: STATUS, RESPCODE and RESPMSG per ORDERID (read-only)." }
 }
 
 function denied(name: string, d: PolicyDecision): ToolOutcome {
@@ -252,6 +264,37 @@ const proposeTicketLink: ToolDef<z.infer<typeof LinkArgs>> = {
   },
 }
 
+const ResendArgs = z.object({
+  orderIds: z.array(z.string().min(1).max(120)).min(1).max(100),
+  rationale: z.string().min(1).max(600),
+  evidenceIds: Cite,
+}).strict()
+
+const proposeWebhookResend: ToolDef<z.infer<typeof ResendArgs>> = {
+  name: "propose_webhook_resend",
+  kind: "proposal",
+  description: "Propose re-sending the payment webhook for unpaid orders whose Transaction Status API result is TXN_SUCCESS and whose last webhook failed (policy-checked).",
+  argsDoc: '{"orderIds": string[], "rationale": string, "evidenceIds": string[]}',
+  schema: ResendArgs,
+  run(_q, state, args) {
+    const missing = uncited(state, args.evidenceIds)
+    if (missing.length) return citeError("propose_webhook_resend", missing)
+    const decision = evaluateAction(
+      { incident: state.incident, retrieved: state.retrieved, latestChecks: null, existingRestartApprovals: 0 },
+      { kind: "RESEND_WEBHOOK", targetIds: args.orderIds },
+    )
+    if (!decision.allowed) return denied("propose_webhook_resend", decision)
+    return {
+      ok: true,
+      summary: `propose_webhook_resend: policy ${decision.ruleId} allows resending the webhook for ${decision.targetIds.length} orders`,
+      evidenceIds: args.evidenceIds, newEvidence: [], newCitable: [],
+      modelResult: { ok: true, accepted: true, ruleId: decision.ruleId, targetIds: decision.targetIds, reason: decision.reason, requiresApproval: false,
+        next: "Executes after your finding; whether orders are now paid is reported only by the verifier." },
+      proposal: { kind: "resend", decision, rationale: args.rationale, evidenceIds: args.evidenceIds },
+    }
+  },
+}
+
 const HandoffArgs = z.object({ summary: z.string().min(1).max(800), evidenceIds: Cite }).strict()
 const recordSettlementHandoff: ToolDef<z.infer<typeof HandoffArgs>> = {
   name: "record_settlement_handoff",
@@ -306,27 +349,42 @@ export const TOOLS: Record<string, AnyTool> = Object.fromEntries([
   readTool("read_tickets", "ticket", "support ticket"),
   readTool("read_payments", "payment", "payment"),
   readTool("read_settlements", "settlement", "settlement"),
+  readTool("read_orders", "order", "merchant order"),
+  readTool("read_webhook_log", "webhook_attempt", "webhook delivery attempt"),
+  statusApiTool(),
   getRecoverySnapshot,
   deviceProposal("propose_config_sync", "sync", "Propose the policy-allowed mock configuration sync for cohort devices whose records you read."),
   deviceProposal("request_restart_approval", "restart", "Request human approval to mock-restart devices the verifier reports unresolved."),
   proposeTicketLink,
+  proposeWebhookResend,
   recordSettlementHandoff,
   escalate,
 ].map((t) => [t.name, t]))
 
 const TRIAGE_READS = ["get_incident", "read_devices", "read_device_events", "read_merchants", "read_tickets", "read_payments", "read_settlements"]
+const ORDER_TRIAGE_READS = ["get_incident", "read_orders", "read_webhook_log", "check_pg_status", "read_merchants", "read_tickets"]
+const READS_BY_SCENARIO: Record<string, string[]> = {
+  soundbox: ["get_incident", "read_devices", "read_device_events", "read_merchants", "read_tickets", "read_payments"],
+  "duplicate-tickets": ["get_incident", "read_tickets", "read_merchants"],
+  "settlement-discrepancy": ["get_incident", "read_settlements", "read_tickets", "read_merchants", "read_payments"],
+  "order-unpaid": ORDER_TRIAGE_READS,
+}
 const CONTINUATION_READS = ["get_recovery_snapshot", "read_devices", "read_device_events"]
 
 /** Only the next stage's eligible tools are exposed. Proposals unlock after a real read. */
 export function eligibleTools(state: ToolState, stage: Stage): string[] {
   if (state.proposal) return []
   const scenario = state.incident.card.scenario
-  const reads = stage === "triage" ? TRIAGE_READS : CONTINUATION_READS
+  // Each case type is offered only the lookups that fit it, and a lookup already done is not offered again.
+  // At real data volumes the AI must not re-read the same records over and over.
+  const base = stage === "triage" ? (READS_BY_SCENARIO[scenario] ?? TRIAGE_READS) : CONTINUATION_READS
+  const reads = base.filter((name) => !state.used.has(name))
   const hasRead = state.retrieved.size > 0 || state.citable.size > 0
   if (!hasRead) return reads
   let proposals: string[] = []
   if (scenario === "soundbox") proposals = stage === "triage" ? ["propose_config_sync"] : ["request_restart_approval"]
   else if (scenario === "duplicate-tickets" && stage === "triage") proposals = ["propose_ticket_link"]
+  else if (scenario === "order-unpaid" && stage === "triage") proposals = ["propose_webhook_resend"]
   else if (scenario === "settlement-discrepancy" && stage === "triage") proposals = ["record_settlement_handoff"]
   return [...reads, ...proposals, "escalate"]
 }
